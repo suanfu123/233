@@ -695,6 +695,7 @@
       /* 玩家 */
       if (!paused) player.update(dt, input);
       else { input.jump = false; }
+      input.spacePressed = false;
 
       /* 世界加载 */
       world.update(player.pos[0], player.pos[2], dt, renderer);
