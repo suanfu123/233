@@ -7,7 +7,7 @@
   const HW = 0.3, HEIGHT = 1.8, EYE = 1.62;
   const GRAVITY = 32, JUMP_V = 8.6, TERMINAL = 78;
 
-  const SPEED = { walk: 4.317, sprint: 5.612, sneak: 1.31, fly: 10.9, flySprint: 21.8, swim: 2.6 };
+  const SPEED = { walk: 4.317, sprint: 5.612, sneak: 1.31, fly: 10.9, flySprint: 21.8, flyVertical: 7.5, swim: 2.6 };
 
   class Player {
     constructor(world) {
@@ -99,8 +99,12 @@
       /* 竖直速度 */
       if (this.flying) {
         let vy = 0;
-        if (input.jump) vy += speed;
-        if (input.sneak) vy -= speed;
+        if (input.jump && input.sneak) {
+          vy = 0;
+        } else {
+          if (input.jump) vy = SPEED.flyVertical;
+          if (input.sneak) vy = -SPEED.flyVertical;
+        }
         this.vel[1] = vy;
       } else if (this.inWater) {
         this.vel[1] -= GRAVITY * 0.18 * dt;
@@ -118,7 +122,14 @@
 
       /* 水平速度 (直接设定, 手感更接近) */
       const targetX = wx * speed, targetZ = wz * speed;
-      const accel = this.onGround || this.flying || this.inWater ? 12 : 3.2;
+      let accel;
+      if (this.flying) {
+        accel = len > 0 ? 3.0 : 0.8;
+      } else if (this.onGround || this.inWater) {
+        accel = 12;
+      } else {
+        accel = 3.2;
+      }
       const k = Math.min(1, accel * dt);
       this.vel[0] += (targetX - this.vel[0]) * k;
       this.vel[2] += (targetZ - this.vel[2]) * k;
@@ -186,7 +197,12 @@
                 this.vel[2] = 0;
               } else {
                 if (amount > 0) { p[1] = Y0 - HEIGHT - eps; this.vel[1] = 0; }
-                else { p[1] = Y1 + eps; this.vel[1] = 0; this.onGround = true; }
+                else {
+                  p[1] = Y1 + eps; this.vel[1] = 0; this.onGround = true;
+                  if (this.flying && this.mode === 'creative') {
+                    this.flying = false;
+                  }
+                }
               }
             }
           }

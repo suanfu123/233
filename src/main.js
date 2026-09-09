@@ -409,7 +409,6 @@
       if (e.code === 'Slash' && hud.screen === 'game') { hud.chatActive = true; hud.screen = 'chat'; hud.chatInput = '/'; document.exitPointerLock(); e.preventDefault(); }
       if (e.code === 'F11') { toggleFullscreen(); e.preventDefault(); }
       if (e.code === 'F1') { hud.hidden = !hud.hidden; e.preventDefault(); }
-      if (e.code === 'KeyF' && hud.screen === 'game') { player.flying = !player.flying; }
       if (e.code === 'KeyG' && hud.screen === 'game') { player.mode = player.mode === 'creative' ? 'survival' : 'creative'; hud.showToast('游戏模式: ' + (player.mode === 'creative' ? '创造' : '生存')); }
 
       if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].indexOf(e.code) >= 0) e.preventDefault();
@@ -716,7 +715,7 @@
       /* 相机 */
       const eye = player.eye();
       const bob = player.bob;
-      const fov = (settings.fovDeg + (player.sprinting ? 4 : 0)) * Math.PI / 180;
+      const fov = (settings.fovDeg + (player.sprinting ? 4 : 0) + (player.flying ? 7 : 0)) * Math.PI / 180;
       const aspect = glCanvas.width / glCanvas.height;
       const farPlane = Math.max(320, world.renderDistance * 16 * 2.2 + 120);
       MC.mat4.perspective(cam.proj, fov, aspect, 0.1, farPlane);
