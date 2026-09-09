@@ -836,7 +836,10 @@
     /* 淡出加载界面 */
     setTimeout(() => {
       boot.style.opacity = '0';
-      setTimeout(() => { boot.style.display = 'none'; }, 400);
+      setTimeout(() => {
+        boot.style.display = 'none';
+        requestLock();
+      }, 400);
       hud.addMessage('§e欢迎来到 Minecraft 1.16.5 网页版！');
       hud.addMessage('§7WASD 移动 · 空格跳跃 · 双击空格飞行 · 左键破坏 · 右键放置');
       hud.addMessage('§7E 物品栏 · T 聊天 · F3 调试 · Esc 菜单');

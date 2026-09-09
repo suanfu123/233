@@ -13,14 +13,14 @@
   const W_BTN_HOVER = [0, 86, 200, 20];
   const W_BTN_DISABLED = [0, 46, 200, 20];
 
-  const CATEGORIES = ['建筑', '自然', '装饰', '红石', '杂项'];
+  const CATEGORIES = ['建筑', '自然', '红石', '功能', '装饰'];
 
   function classify(id) {
-    if (/redstone|piston|dispenser|dropper|observer|target|tnt|lamp|lever|button|rail|hopper|note_block|jukebox/.test(id)) return 3;
-    if (/torch|lantern|campfire|glowstone|sea_lantern|shroomlight|chain|end_rod|bell|glass_pane|banner|sign|flower_pot|conduit|beacon|scaffolding|cobweb/.test(id)) return 2;
-    if (/grass|leaves|flower|sapling|mushroom|vine|kelp|seagrass|cactus|bamboo|dirt|podzol|mycelium|snow|ice|water|lava|clay|gravel|dandelion|poppy|tulip|daisy|cornflower|lily|sunflower|lilac|rose|peony|dead_bush|sugar_cane|lily_pad|pumpkin|melon|farmland|path|sand|nylium|wart|sponge/.test(id)) return 1;
-    if (/stone|brick|plank|log|wood|glass|wool|concrete|terracotta|quartz|purpur|prismarine|blackstone|basalt|nether|iron|gold|diamond|emerald|lapis|coal|slab|stairs|wall|fence|door|trapdoor|anvil|hay|bone|slime|honey|obsidian|bedrock|crafting|furnace|smoker|barrel|bookshelf|chest|table|loom|grindstone|stonecutter|composter|target|dragon|respawn|lodestone/.test(id)) return 0;
-    return 4;
+    if (/redstone|piston|dispenser|dropper|observer|target|tnt|lamp|lever|button|rail|hopper|note_block|jukebox|comparator|repeater|redstone_torch|redstone_lamp|redstone_wire|tripwire_hook|trapped_chest|daylight_detector|sculk_sensor/.test(id)) return 2;
+    if (/banner|sign|flower_pot|bed|skull|head|candle|cake|armor_stand|item_frame|painting|lead|bell|conduit|beacon/.test(id)) return 4;
+    if (/torch|lantern|campfire|glowstone|sea_lantern|shroomlight|chain|end_rod|scaffolding|cobweb|chest|crafting|furnace|smoker|barrel|bookshelf|anvil|loom|grindstone|stonecutter|composter|cauldron|lectern|blast_furnace|cartography_table|fletching_table|smithing_table|turtle_egg|lightning_rod|sculk|glass_pane|iron_bars|fence|fence_gate|door|trapdoor|button|lever|pressure_plate|tripwire/.test(id)) return 3;
+    if (/grass|leaves|flower|sapling|mushroom|vine|kelp|seagrass|cactus|bamboo|dirt|podzol|mycelium|snow|ice|water|lava|clay|gravel|dandelion|poppy|tulip|daisy|cornflower|lily|sunflower|lilac|rose|peony|dead_bush|sugar_cane|lily_pad|pumpkin|melon|farmland|path|sand|nylium|wart|sponge|moss|azalea|dripleaf|glow_lichen|tall_grass|fern|large_fern|bush/.test(id)) return 1;
+    return 0;
   }
 
   class Hud {
@@ -57,7 +57,7 @@
       for (const b of MC.Blocks.byType) {
         if (!b || seen.has(b.id)) continue;
         seen.add(b.id);
-        if (b.id === 'water' || b.id === 'lava' || b.id === 'bedrock') continue;
+        if (b.id === 'water' || b.id === 'lava' || b.id === 'bedrock' || b.id === 'air' || b.id === 'cave_air' || b.id === 'void_air' || b.id === 'barrier' || b.id === 'piston_head' || b.id === 'moving_piston' || b.id === 'light') continue;
         this.categories[classify(b.id)].push(b.type);
       }
       this.allBlocks = this.categories.reduce((a, c) => a.concat(c), []);
@@ -128,51 +128,99 @@
       if (!def) return;
       const top = this.tex.img(def.iconTop);
       const side = this.tex.img(def.iconSide);
-      if (!top && !side) {
+      const all = this.tex.img(def.iconAll);
+      if (!top && !side && !all) {
         ctx.fillStyle = '#f0f';
         ctx.fillRect(x, y, 16 * s, 16 * s);
         return;
       }
-      if (!side || def.kind === 'plant') {
-        const img = side || top;
+      const kind = def.kind;
+
+      /* 非完整方块: 平面渲染 */
+      if (kind === 'plant' || kind === 'none' || kind === 'facing' || (!top && !all)) {
+        const img = all || side || top;
         if (img) ctx.drawImage(img, x, y, 16 * s, 16 * s);
         return;
       }
-      const half = 8 * s;
-      /* ox/oy: 该面在图标内的原点(逻辑像素); a,b,c,d: 把 16x16 贴图映射成平行四边形的仿射矩阵 */
-      const face = (img, ox, oy, a, b, c, d, dark) => {
-        if (!img) return;
+
+      /* 草方块侧面翻转 */
+      let sideTex = side;
+      if (def.id === 'grass_block') {
+        if (!Hud._grassFlipCache) {
+          const cv = document.createElement('canvas');
+          cv.width = 16; cv.height = 16;
+          const cx = cv.getContext('2d');
+          cx.translate(0, 16); cx.scale(1, -1);
+          if (side) cx.drawImage(side, 0, 0);
+          Hud._grassFlipCache = cv;
+        }
+        sideTex = Hud._grassFlipCache;
+      }
+
+      const topTex = top || side;
+
+      /* 绘制一个面: 把16x16贴图映射到四边形 */
+      const quad = (tex, x0, y0, x1, y1, x2, y2, x3, y3, dark) => {
+        if (!tex) return;
         ctx.save();
-        ctx.translate(x + ox, y + oy);
         ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(a, b);
-        ctx.lineTo(a + c, b + d);
-        ctx.lineTo(c, d);
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.lineTo(x3, y3);
         ctx.closePath();
         ctx.clip();
-        ctx.transform(a / 16, b / 16, c / 16, d / 16, 0, 0);
-        ctx.drawImage(img, 0, 0, 16, 16);
+        /* 仿射变换: 16x16 -> 四边形 */
+        ctx.transform(
+          (x1 - x0) / 16, (y1 - y0) / 16,
+          (x3 - x0) / 16, (y3 - y0) / 16,
+          x0, y0
+        );
+        ctx.drawImage(tex, 0, 0, 16, 16);
         ctx.restore();
         if (dark > 0) {
           ctx.save();
-          ctx.translate(x + ox, y + oy);
           ctx.beginPath();
-          ctx.moveTo(0, 0);
-          ctx.lineTo(a, b);
-          ctx.lineTo(a + c, b + d);
-          ctx.lineTo(c, d);
+          ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
+          ctx.lineTo(x2, y2); ctx.lineTo(x3, y3);
           ctx.closePath();
           ctx.fillStyle = 'rgba(0,0,0,' + dark + ')';
           ctx.fill();
           ctx.restore();
         }
       };
-      /* 等轴测: 顶面 (0,h/2)->(h/2,0)->(h, h/2)->(h/2,h), 左面、右面各占一半高度 */
-      const hw = half, hh = half * 0.5;
-      face(top || side, 0, hh, hw, -hh, hw, hh, 0);           // 顶面 (0,hh)(hw,0)(2hw,hh)(hw,2hh)
-      face(side, 0, hh, 0, hh, hw, hh, 0.22);                 // 左面 (0,hh)(0,2hh)(hw,3hh)(hw,2hh)
-      face(side, hw, 2 * hh, hw, -hh, 0, hh, 0.42);           // 右面 (hw,2hh)(2hw,hh)(2hw,3hh)(hw,4hh)
+
+      /*
+       * 等轴测立方体, 填满 16x16
+       * 顶面菱形: (0,4) (8,0) (16,4) (8,8)    — 16宽 x 8高
+       * 左面:     (0,4) (8,8) (8,16) (0,12)   — 8宽 x 8高
+       * 右面:     (8,8) (16,4) (16,12) (8,16) — 8宽 x 8高
+       * 总范围: x=0..16, y=0..16
+       */
+      const bx = x, by = y;
+      const hw = 8 * s;
+      const hh = 4 * s;
+
+      /* 顶面 */
+      quad(topTex,
+        bx, by + hh,
+        bx + hw, by,
+        bx + 2 * hw, by + hh,
+        bx + hw, by + 2 * hh, 0);
+
+      /* 左面 */
+      quad(sideTex,
+        bx, by + hh,
+        bx + hw, by + 2 * hh,
+        bx + hw, by + 2 * hh + 8 * s,
+        bx, by + hh + 8 * s, 0.22);
+
+      /* 右面 */
+      quad(sideTex,
+        bx + hw, by + 2 * hh,
+        bx + 2 * hw, by + hh,
+        bx + 2 * hw, by + hh + 8 * s,
+        bx + hw, by + 2 * hh + 8 * s, 0.42);
     }
 
     /* ---------- 主绘制 ---------- */
