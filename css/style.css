@@ -1,0 +1,41 @@
+html, body {
+  margin: 0; padding: 0; width: 100%; height: 100%;
+  overflow: hidden; background: #000;
+  font-family: monospace;
+  -webkit-user-select: none; user-select: none;
+}
+canvas { display: block; position: absolute; top: 0; left: 0; }
+#gl  { z-index: 1; width: 100%; height: 100%; }
+#hud { z-index: 2; width: 100%; height: 100%; image-rendering: pixelated; }
+
+#boot {
+  position: absolute; inset: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity .35s ease;
+}
+#boot-bg {
+  position: absolute; inset: 0;
+  background: #2b2b2b url('../assets/minecraft/textures/gui/options_background.png');
+  background-size: 64px 64px; image-rendering: pixelated;
+  opacity: .55;
+}
+#boot-inner { position: relative; text-align: center; color: #fff; }
+#boot-title {
+  font-size: 42px; font-weight: 900; letter-spacing: 3px;
+  text-shadow: 4px 4px 0 #3b3b3b, 0 0 18px #000;
+  color: #b9b9b9;
+}
+#boot-sub { font-size: 13px; color: #d8d8d8; margin: 6px 0 26px; text-shadow: 2px 2px 0 #000; letter-spacing: 1px; }
+#boot-bar {
+  width: 320px; height: 12px; margin: 0 auto;
+  border: 2px solid #000; background: #1b1b1b; padding: 2px;
+  box-shadow: inset 0 0 0 1px #4b4b4b;
+}
+#boot-bar-fill { height: 100%; width: 0%; background: #6ac04a; transition: width .12s linear; }
+#boot-msg { margin-top: 10px; font-size: 12px; color: #cfcfcf; text-shadow: 2px 2px 0 #000; }
+
+#fatal {
+  position: absolute; inset: 0; z-index: 20; background: #1a1a1a;
+  color: #ff8a8a; padding: 40px; overflow: auto; font-size: 13px; line-height: 1.6;
+}
+#fatal pre { white-space: pre-wrap; }

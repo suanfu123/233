@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Minecraft 1.16.5 — Web</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="hud"></canvas>
+
+<div id="boot">
+  <div id="boot-bg"></div>
+  <div id="boot-inner">
+    <div id="boot-title">MINECRAFT</div>
+    <div id="boot-sub">1.16.5 · 网页版</div>
+    <div id="boot-bar"><div id="boot-bar-fill"></div></div>
+    <div id="boot-msg">正在加载资源…</div>
+  </div>
+</div>
+
+<div id="fatal" hidden><pre id="fatal-msg"></pre></div>
+
+<script src="assets/generated/blocks.js"></script>
+<script src="src/core/util.js"></script>
+<script src="src/core/glutil.js"></script>
+<script src="src/core/textures.js"></script>
+<script src="src/core/font.js"></script>
+<script src="src/world/blocks.js"></script>
+<script src="src/world/worldgen.js"></script>
+<script src="src/world/chunk.js"></script>
+<script src="src/world/world.js"></script>
+<script src="src/render/sky.js"></script>
+<script src="src/render/renderer.js"></script>
+<script src="src/player/player.js"></script>
+<script src="src/ui/hud.js"></script>
+<script src="src/main.js"></script>
+</body>
+</html>
