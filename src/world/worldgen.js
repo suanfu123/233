@@ -5,7 +5,7 @@
   'use strict';
 
   const CHUNK = 16;
-  const HEIGHT = 128;
+  const HEIGHT = 384;
   const SEA = 62;
 
   /* 生物群系表 (温度/湿度参考 1.16.5) */
@@ -116,10 +116,10 @@
       const c = this.nCont.fbm2(x * 0.0012, z * 0.0012, 4);
       const h1 = this.nHill.fbm2(x * 0.0075, z * 0.0075, 4);
       const d = this.nDetail.fbm2(x * 0.03, z * 0.03, 3);
-      let base = SEA + c * 36;
+      let base = SEA + c * 40;
       const m = Math.max(0, c - 0.22) / 0.78;
-      base += m * m * 44 * (0.5 + 0.5 * h1);
-      base += h1 * 5 + d * 2.5;
+      base += m * m * 55 * (0.5 + 0.5 * h1);
+      base += h1 * 6 + d * 3;
       return MC.clamp(Math.round(base), 3, HEIGHT - 8);
     },
 
@@ -248,10 +248,12 @@
             if (r < bio.grass * 0.75) blocks[idx] = TY.grass;
             else if (r < bio.grass * 0.75 + bio.grass * 0.25) blocks[idx] = TY.tall_grass;
           }
-          if (bio.flower && r > 0.9 && surf === TY.grass_block) {
-            const flowers = [TY.dandelion, TY.poppy, TY.blue_orchid, TY.allium, TY.azure_bluet, TY.red_tulip,
-              TY.orange_tulip, TY.white_tulip, TY.pink_tulip, TY.oxeye_daisy, TY.cornflower, TY.lily_of_the_valley];
-            blocks[idx] = flowers[(rnd() * flowers.length) | 0];
+          if (bio.flower && surf === TY.grass_block && blocks[idx] === 0) {
+            if (rnd() < bio.flower) {
+              const flowers = [TY.dandelion, TY.poppy, TY.blue_orchid, TY.allium, TY.azure_bluet, TY.red_tulip,
+                TY.orange_tulip, TY.white_tulip, TY.pink_tulip, TY.oxeye_daisy, TY.cornflower, TY.lily_of_the_valley];
+              blocks[idx] = flowers[(rnd() * flowers.length) | 0];
+            }
           }
           if (bio.cactus && surf === TY.sand && rnd() < bio.cactus) {
             const ht = 1 + ((rnd() * 3) | 0);

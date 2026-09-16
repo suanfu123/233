@@ -6,7 +6,8 @@
 
   const TEX_BASE = 'assets/minecraft/textures/';
   const TEX_SIZE = 16;
-  const LAYERS_PER_ARRAY = 256;      // WebGL2 保证至少 256 层
+  const DEFAULT_LAYERS = 256;      // 默认每层数量
+  const MAX_ARRAYS = 4;            // 最多 4 个纹理数组（对应着色器中的 4 个采样器）
 
   const GUI_FILES = {
     widgets: 'gui/widgets.png',
@@ -64,6 +65,10 @@
       let done = 0;
       const tick = (label) => { done++; if (onProgress) onProgress(done, total, label); };
 
+      /* ---------- 0. 检测纹理数组层数上限 ---------- */
+      const maxLayers = gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS) || 256;
+      const LAYERS_PER_ARRAY = Math.min(DEFAULT_LAYERS, maxLayers);
+
       /* ---------- 1. 方块贴图 ---------- */
       const imgs = new Array(names.length);
       const cv = document.createElement('canvas');
@@ -71,7 +76,7 @@
       const cx = cv.getContext('2d', { willReadFrequently: false });
       cx.imageSmoothingEnabled = false;
 
-      const arrayCount = Math.ceil(names.length / LAYERS_PER_ARRAY);
+      const arrayCount = Math.min(Math.ceil(names.length / LAYERS_PER_ARRAY), MAX_ARRAYS);
       const arrays = [];
       for (let i = 0; i < arrayCount; i++) {
         arrays.push(MC.gl.textureArray(gl, TEX_SIZE, LAYERS_PER_ARRAY, { mipmap: true }));
@@ -81,7 +86,9 @@
 
       const jobs = names.map((name, i) => loadImage(TEX_BASE + name + '.png').then((img) => {
         imgs[i] = img;
-        const arr = (i / LAYERS_PER_ARRAY) | 0, layer = i % LAYERS_PER_ARRAY;
+        let arr = (i / LAYERS_PER_ARRAY) | 0, layer = i % LAYERS_PER_ARRAY;
+        /* 超出纹理数组数量限制的贴图，映射到最后一个数组（可能部分浪费） */
+        if (arr >= arrayCount) { arr = arrayCount - 1; layer = i - (arrayCount - 1) * LAYERS_PER_ARRAY; }
         layerOf[i] = layer; arrOf[i] = arr;
         cx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
         if (img) {
@@ -92,7 +99,7 @@
           cx.fillStyle = '#f0f'; cx.fillRect(0, 0, 8, 8); cx.fillRect(8, 8, 8, 8);
         }
         fixAlphaBleed(cv, cx);
-        MC.gl.uploadLayer(gl, arrays[arr], layer, cv);
+        if (arr < arrayCount) MC.gl.uploadLayer(gl, arrays[arr], layer, cv);
         tick(name);
       }));
 
@@ -165,7 +172,7 @@
       const dummy2D = MC.gl.texture2D(gl, dummyCanvas, {});
 
       const api = {
-        arrays, layerOf, arrOf, texIndex, names, imgs, anim, gui, colormap, dummy2D,
+        arrays, arrayCount, layerOf, arrOf, texIndex, names, imgs, anim, gui, colormap, dummy2D,
         /** 贴图名 -> {layer, arr, index} */
         lookup(name) {
           const i = texIndex[name];

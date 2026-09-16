@@ -4,7 +4,7 @@
 (function (MC) {
   'use strict';
 
-  const CHUNK = 16, HEIGHT = 128;
+  const CHUNK = 16, HEIGHT = 384;
   const IDX = (x, y, z) => (y * CHUNK + z) * CHUNK + x;
   let LIGHT_QUEUE = new Int32Array(CHUNK * CHUNK * HEIGHT * 2);
 
@@ -76,6 +76,59 @@
     }
 
     /* ---------------- 光照 ---------------- */
+    /** 列级天空光重算: 只重算单个 (lx, lz) 列的天空光，然后有限扩散 */
+    relightColumn(lx, lz) {
+      const blocks = this.blocks, light = this.light;
+      let q = LIGHT_QUEUE;
+      let head = 0, tail = 0;
+      const push = (v) => {
+        if (tail >= q.length) { const nq = new Int32Array(q.length * 2); nq.set(q); q = nq; LIGHT_QUEUE = nq; }
+        q[tail++] = v;
+      };
+
+      /* 1. 重算该列的天空光 */
+      let s = 15;
+      for (let y = HEIGHT - 1; y >= 0; y--) {
+        const i = IDX(lx, y, lz);
+        const t = blocks[i] & 0xFFF;
+        const op = t === 0 ? 0 : MC.Blocks.opacityOf(t);
+        if (op >= 15) s = 0;
+        else if (op > 0) s = Math.max(0, s - op);
+        light[i] = s << 4;
+        if (s > 1) push(i);
+      }
+
+      /* 2. 从该列向外有限扩散 (只扩散受该列变化影响的邻居) */
+      const spread = (shift, mask) => {
+        while (head < tail) {
+          const i = q[head++];
+          const l = (light[i] >> shift) & mask;
+          if (l <= 1) continue;
+          const y = (i / (CHUNK * CHUNK)) | 0;
+          const r = i - y * CHUNK * CHUNK;
+          const z = (r / CHUNK) | 0, x = r - z * CHUNK;
+          for (let d = 0; d < 6; d++) {
+            const n = FN[d];
+            const nx = x + n[0], ny = y + n[1], nz = z + n[2];
+            if (nx < 0 || nx >= CHUNK || nz < 0 || nz >= CHUNK || ny < 0 || ny >= HEIGHT) continue;
+            const ni = IDX(nx, ny, nz);
+            const nt = blocks[ni] & 0xFFF;
+            const op = nt === 0 ? 0 : MC.Blocks.opacityOf(nt);
+            if (op >= 15) continue;
+            let nl = l - 1 - (op > 0 ? op - 1 : 0);
+            if (n[1] === -1 && shift === 4) nl = l - (op > 0 ? op : 0);
+            if (nl <= 0) continue;
+            const cur = (light[ni] >> shift) & mask;
+            if (nl > cur) {
+              light[ni] = (light[ni] & ~(mask << shift)) | (nl << shift);
+              push(ni);
+            }
+          }
+        }
+      };
+      spread(4, 15);
+    }
+
     computeLight() {
       const blocks = this.blocks, light = this.light;
       light.fill(0);

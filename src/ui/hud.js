@@ -506,7 +506,7 @@
       this.buttons = [];
       this.sliders = [];
       const bw = 200, bx = Math.round(w / 2 - bw / 2);
-      let by = 60;
+      let by = 56;
       const slider = (label, val, min, max, step, fmt) => {
         const y = by;
         const x = bx;
@@ -521,19 +521,33 @@
         by += 24;
         return this.sliders[this.sliders.length - 1];
       };
+      const toggle = (label, val) => {
+        const y = by;
+        const x = bx;
+        const hover = this.mouseX >= x && this.mouseX <= x + bw && this.mouseY >= y && this.mouseY <= y + 20;
+        ctx.fillStyle = hover ? '#5a5a5a' : '#3a3a3a'; ctx.fillRect(x, y, bw, 20);
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.strokeRect(x + 0.5, y + 0.5, bw - 1, 19);
+        const indicator = val ? '[x]' : '[ ]';
+        const txt = label + ': ' + indicator;
+        F().draw(ctx, txt, x + bw / 2 - F().width(txt, 1) / 2, y + 6, { scale: 1, color: '#ffffff', shadow: true });
+        this.buttons.push({ x, y, w: bw, h: 20, label, toggle: true, val });
+        by += 24;
+      };
 
-      slider('渲染距离', game.settings.renderDistance, 2, 16, 1, v => v + ' 区块').set = (v) => {
+      slider('渲染距离', game.settings.renderDistance, 2, 24, 1, v => v + ' 区块').set = (v) => {
         game.settings.renderDistance = v; game.world.renderDistance = v;
       };
-      slider('视野 FOV', game.settings.fovDeg, 40, 120, 1, v => v + '°').set = (v) => { game.settings.fovDeg = v; };
+      slider('视野 FOV', game.settings.fovDeg, 40, 120, 1, v => v + '\u00b0').set = (v) => { game.settings.fovDeg = v; };
       slider('鼠标灵敏度', game.settings.sensitivity * 100, 10, 300, 5, v => (v / 100).toFixed(2)).set = (v) => { game.settings.sensitivity = v / 100; };
       slider('亮度', game.settings.brightness * 100, 20, 100, 5, v => v + '%').set = (v) => { game.settings.brightness = v / 100; };
       slider('界面缩放', game.settings.guiScale || this.guiScale, 1, 4, 1, v => v + 'x').set = (v) => {
         game.settings.guiScale = v; this.forcedScale = v; this.resize();
       };
+      toggle('鼠标反转 Y 轴', !!game.settings.mouseInverted);
       by += 4;
       this.buttons.push(this.btn(bx, by, bw, 20, '完成', true)); by += 24;
-      this.buttons.push(this.btn(bx, by, bw, 20, '全屏: ' + (document.fullscreenElement ? '开' : '关'), true));
+      this.buttons.push(this.btn(bx, by, bw, 20, '全屏: ' + (document.fullscreenElement ? '开' : '关'), true)); by += 24;
+      this.buttons.push(this.btn(bx, by, bw, 20, '恢复默认设置', true));
     }
 
     /* ---------- 消息 ---------- */

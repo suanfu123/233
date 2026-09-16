@@ -88,14 +88,17 @@ layout(location=0) in vec3 aPos;
 uniform mat4 uProj, uView, uModel;
 uniform vec2 uOffset;
 out vec2 vUV;
+out float vDist;
 void main(){
   vUV = aPos.xz * 0.00390625 + uOffset;   // 256 方块 = 1 贴图
+  vDist = length(aPos.xz);
   gl_Position = uProj * uView * uModel * vec4(aPos, 1.0);
 }`;
 
   const CLOUD_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
+in float vDist;
 uniform sampler2D uTex;
 uniform float uBright;
 uniform vec3 uFogColor;
@@ -104,7 +107,10 @@ out vec4 fragColor;
 void main(){
   vec4 t = texture(uTex, vUV);
   if (t.a < 0.35) discard;
-  fragColor = vec4(t.rgb * uBright, t.a * 0.86);
+  float fog = clamp((vDist - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
+  fog *= fog;
+  vec3 col = mix(t.rgb * uBright, uFogColor, fog);
+  fragColor = vec4(col, t.a * 0.86 * (1.0 - fog));
 }`;
 
   const Sky = MC.Sky = {
@@ -182,6 +188,9 @@ void main(){
         gl.uniformMatrix4fv(cp.u.uModel, false, M);
         gl.uniform2f(cp.u.uOffset, cam.pos[0] / 256 + env.time * 0.0008, cam.pos[2] / 256);
         gl.uniform1f(cp.u.uBright, env.cloudBright);
+        gl.uniform3fv(cp.u.uFogColor, env.fogColor || env.fog || [0.5, 0.6, 0.8]);
+        gl.uniform1f(cp.u.uFogStart, env.fogStart != null ? env.fogStart : 1e5);
+        gl.uniform1f(cp.u.uFogEnd, env.fogEnd != null ? env.fogEnd : 2e5);
         gl.uniform1i(cp.u.uTex, 0);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.cloudTex);

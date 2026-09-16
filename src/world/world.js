@@ -4,7 +4,7 @@
 (function (MC) {
   'use strict';
 
-  const CHUNK = 16, HEIGHT = 128;
+  const CHUNK = 16, HEIGHT = 384;
 
   class World {
     constructor(gen, seed) {
@@ -65,9 +65,26 @@
       const lx = x & 15, lz = z & 15;
       const i = ((y * CHUNK + lz) * CHUNK) + lx;
       if (c.blocks[i] === id) return false;
+
+      /* 检测发光变化: 旧方块发光 or 新方块发光 -> 需要全区块重算 */
+      const oldId = c.blocks[i];
+      const oldLightEmit = oldId ? MC.Blocks.lightEmit(oldId & 0xFFF) : 0;
+      const newLightEmit = id ? MC.Blocks.lightEmit(id & 0xFFF) : 0;
+      const lightChanged = (oldLightEmit > 0) !== (newLightEmit > 0) || oldLightEmit !== newLightEmit;
+
       c.blocks[i] = id;
       c.dirty = true;
-      c.needsRelight = true;          // 光照重算延后到帧预算内, 避免卡顿
+
+      if (lightChanged) {
+        /* 发光方块变化: 需要全区块重算 (代价高但不常见) */
+        c.needsRelight = true;
+      } else {
+        /* 非发光方块变化: 只重算受影响的列 (高效) */
+        c._dirtyColumns = c._dirtyColumns || [];
+        if (!c._dirtyColumns.includes(lx + lz * CHUNK)) {
+          c._dirtyColumns.push(lx + lz * CHUNK);
+        }
+      }
 
       if (lx === 0) this._relight(cx - 1, cz);
       if (lx === 15) this._relight(cx + 1, cz);
@@ -138,6 +155,15 @@
         const c = this.chunks.get(cx + ',' + cz);
         if (!c || !c.generated) continue;
         if (c.needsRelight) { c.computeLight(); c.needsRelight = false; c.dirty = true; }
+        /* 列级增量光照: 只重算受影响的列 */
+        if (c._dirtyColumns && c._dirtyColumns.length) {
+          for (const idx of c._dirtyColumns) {
+            const lx = idx % CHUNK, lz = (idx / CHUNK) | 0;
+            c.relightColumn(lx, lz);
+          }
+          c._dirtyColumns = [];
+          c.dirty = true;
+        }
         if (!c.dirty) continue;
         if (!this.neighborsReady(cx, cz)) continue;
         this.buildChunkMesh(c, renderer);

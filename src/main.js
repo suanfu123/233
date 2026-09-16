@@ -339,6 +339,16 @@
       } else {
         const [lx, ly] = hud.toLogical(e.clientX, e.clientY);
         hud.mouseX = lx; hud.mouseY = ly;
+        /* 滑块拖动 */
+        if (hud.sliderDrag) {
+          const s = hud.sliderDrag;
+          const t = MC.clamp((lx - s.x) / s.w, 0, 1);
+          let v = s.min + t * (s.max - s.min);
+          v = Math.round(v / s.step) * s.step;
+          v = MC.clamp(v, s.min, s.max);
+          s.val = v;
+          if (s.set) s.set(v);
+        }
       }
     });
 
@@ -355,6 +365,7 @@
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) { input.breakHeld = false; game.breaking.active = false; game.breaking.progress = 0; }
       if (e.button === 2) input.placeHeld = false;
+      hud.sliderDrag = null;
     });
     window.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -425,6 +436,120 @@
       for (const k in input) if (typeof input[k] === 'boolean') input[k] = false;
     });
 
+    /* ============================================================
+     *  移动端触摸控制
+     * ============================================================ */
+    const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+      || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
+    MC.isMobile = isMobile;
+
+    if (isMobile) {
+      const touch = { moveStick: null, lookTouch: null, moveStart: null, lookStart: null };
+      const STICK_RADIUS = 50;
+
+      /* 创建虚拟摇杆和按钮的 HUD 元素 */
+      const touchUI = document.createElement('div');
+      touchUI.id = 'touch-ui';
+      touchUI.style.cssText = 'position:fixed;bottom:0;left:0;right:0;top:0;pointer-events:none;z-index:100;';
+      document.body.appendChild(touchUI);
+
+      function makeBtn(label, x, y, size, onDown, onUp) {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.style.cssText = `position:absolute;pointer-events:auto;left:${x}px;top:${y}px;width:${size}px;height:${size}px;border-radius:50%;border:2px solid rgba(255,255,255,0.5);background:rgba(0,0,0,0.3);color:#fff;font-size:${size * 0.35}px;touch-action:none;user-select:none;`;
+        touchUI.appendChild(b);
+        b.addEventListener('touchstart', (e) => { e.preventDefault(); onDown(); });
+        b.addEventListener('touchend', (e) => { e.preventDefault(); onUp(); });
+        b.addEventListener('touchcancel', (e) => { onUp(); });
+        return b;
+      }
+
+      /* 移动摇杆区 (左半屏) */
+      const moveZone = document.createElement('div');
+      moveZone.style.cssText = 'position:absolute;left:20px;bottom:20px;width:120px;height:120px;border-radius:50%;border:2px solid rgba(255,255,255,0.3);background:rgba(0,0,0,0.15);pointer-events:auto;touch-action:none;';
+      touchUI.appendChild(moveZone);
+
+      const moveKnob = document.createElement('div');
+      moveKnob.style.cssText = 'position:absolute;left:35px;top:35px;width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,0.4);pointer-events:none;transition:none;';
+      moveZone.appendChild(moveKnob);
+
+      moveZone.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        const t = e.changedTouches[0];
+        touch.moveStick = t.identifier;
+        touch.moveStart = { x: t.clientX, y: t.clientY };
+      });
+
+      moveZone.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        for (const t of e.changedTouches) {
+          if (t.identifier !== touch.moveStick) continue;
+          const rect = moveZone.getBoundingClientRect();
+          const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+          let dx = t.clientX - cx, dy = t.clientY - cy;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > STICK_RADIUS) { dx = dx / dist * STICK_RADIUS; dy = dy / dist * STICK_RADIUS; }
+          moveKnob.style.left = (35 + dx) + 'px';
+          moveKnob.style.top = (35 + dy) + 'px';
+          const nx = dx / STICK_RADIUS, ny = dy / STICK_RADIUS;
+          input.forward = ny < -0.3;
+          input.back = ny > 0.3;
+          input.left = nx < -0.3;
+          input.right = nx > 0.3;
+        }
+      });
+
+      const resetMove = () => {
+        touch.moveStick = null;
+        moveKnob.style.left = '35px';
+        moveKnob.style.top = '35px';
+        input.forward = input.back = input.left = input.right = false;
+      };
+      moveZone.addEventListener('touchend', (e) => { for (const t of e.changedTouches) if (t.identifier === touch.moveStick) resetMove(); });
+      moveZone.addEventListener('touchcancel', resetMove);
+
+      /* 视角控制区 (右半屏) */
+      const lookZone = document.createElement('div');
+      lookZone.style.cssText = 'position:absolute;right:0;bottom:0;width:50%;height:100%;pointer-events:auto;touch-action:none;';
+      touchUI.appendChild(lookZone);
+
+      lookZone.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (touch.lookTouch !== null) return;
+        const t = e.changedTouches[0];
+        touch.lookTouch = t.identifier;
+        touch.lookStart = { x: t.clientX, y: t.clientY };
+      });
+
+      lookZone.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        for (const t of e.changedTouches) {
+          if (t.identifier !== touch.lookTouch) continue;
+          const dx = t.clientX - touch.lookStart.x;
+          const dy = t.clientY - touch.lookStart.y;
+          touch.lookStart = { x: t.clientX, y: t.clientY };
+          const s = settings.sensitivity * 0.003;
+          player.yaw -= dx * s;
+          player.pitch -= dy * s;
+          player.pitch = MC.clamp(player.pitch, -Math.PI / 2 + 0.001, Math.PI / 2 - 0.001);
+        }
+      });
+
+      const resetLook = () => { touch.lookTouch = null; };
+      lookZone.addEventListener('touchend', (e) => { for (const t of e.changedTouches) if (t.identifier === touch.lookTouch) resetLook(); });
+      lookZone.addEventListener('touchcancel', resetLook);
+
+      /* 按钮 */
+      const bw = 60;
+      const bRight = window.innerWidth - bw - 20;
+      makeBtn('跳', bRight, window.innerHeight - bw * 2 - 40, bw, () => { input.jump = true; }, () => { input.jump = false; });
+      makeBtn('破', bRight - bw - 15, window.innerHeight - bw - 20, bw, () => { input.breakHeld = true; player.swing = 1; }, () => { input.breakHeld = false; game.breaking.active = false; });
+      makeBtn('放', bRight, window.innerHeight - bw - 20, bw, () => { input.placeHeld = true; }, () => { input.placeHeld = false; });
+
+      /* 飞行切换按钮 */
+      makeBtn('飞', bRight - bw - 15, window.innerHeight - bw * 2 - 40, bw * 0.7, () => { player.flying = !player.flying; }, () => {});
+    }
+
     function toggleFullscreen() {
       if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => { });
       else document.exitFullscreen();
@@ -449,10 +574,40 @@
         return;
       }
       if (hud.screen === 'options') {
+        /* 先检查滑块点击 */
+        if (hud.sliders) {
+          for (const s of hud.sliders) {
+            if (mx >= s.x && mx <= s.x + s.w && my >= s.y && my <= s.y + s.h) {
+              const t = MC.clamp((mx - s.x) / s.w, 0, 1);
+              let v = s.min + t * (s.max - s.min);
+              v = Math.round(v / s.step) * s.step;
+              v = MC.clamp(v, s.min, s.max);
+              s.val = v;
+              if (s.set) s.set(v);
+              hud.sliderDrag = s;
+              return;
+            }
+          }
+        }
         for (const b of hud.buttons) {
           if (!hit(b)) continue;
           if (b.label === '完成') { hud.screen = 'pause'; saveSettings(); }
-          if (b.label.startsWith('全屏')) toggleFullscreen();
+          else if (b.label.startsWith('全屏')) toggleFullscreen();
+          else if (b.label.startsWith('鼠标反转')) {
+            settings.mouseInverted = !settings.mouseInverted;
+          }
+          else if (b.label === '恢复默认设置') {
+            settings.renderDistance = 8;
+            settings.fovDeg = 70;
+            settings.sensitivity = 1.0;
+            settings.brightness = 1.0;
+            settings.guiScale = 0;
+            settings.mouseInverted = false;
+            world.renderDistance = 8;
+            hud.forcedScale = 0;
+            hud.resize();
+            hud.showToast('已恢复默认设置');
+          }
         }
         return;
       }

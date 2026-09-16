@@ -183,7 +183,8 @@
               let pt = [px, py, pz];
               if (el.rotation) {
                 const r = el.rotation;
-                pt = rotatePoint(pt, r.origin, r.axis, r.angle, r.rescale, box);
+                const o = [r.origin[0] / TEXSIZE, r.origin[1] / TEXSIZE, r.origin[2] / TEXSIZE];
+                pt = rotatePoint(pt, o, r.axis, r.angle, r.rescale, box);
               }
               if (needsRot) pt = rotateVariant(pt, rot, 0.5);
               p[i * 3] = pt[0]; p[i * 3 + 1] = pt[1]; p[i * 3 + 2] = pt[2];

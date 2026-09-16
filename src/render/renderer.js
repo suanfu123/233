@@ -4,7 +4,7 @@
 (function (MC) {
   'use strict';
 
-  const CHUNK = 16, HEIGHT = 128;
+  const CHUNK = 16, HEIGHT = 384;
 
   const CHUNK_VS = `#version 300 es
 precision highp float;
@@ -114,7 +114,7 @@ void main(){ fragColor = uColor; }`;
         sunGlow: [1.0 * (0.3 + 0.7 * day) + sunset * 0.6, 0.85 * day + sunset * 0.35, 0.55 * day + sunset * 0.1],
         stars: 1 - day,
         cloudBright: 0.32 + 0.68 * day,
-        cloudY: 122,
+        cloudY: 382,
         underwater: false,
         underColor: [0.09, 0.28, 0.45],
         fog: horizon
@@ -238,7 +238,8 @@ void main(){ fragColor = uColor; }`;
       /* 天空 */
       if (!opts.noSky) {
         MC.Sky.draw(gl, cam, Object.assign({}, env, {
-          fogColor, underwater: opts.underwater
+          fogColor, underwater: opts.underwater,
+          fogStart: opts.fogStart, fogEnd: opts.fogEnd
         }));
       }
 
