@@ -17,6 +17,12 @@
       this.meshQueue = [];
       this.stats = { chunks: 0, quads: 0, genPerFrame: 0, meshPerFrame: 0 };
       this.onChunkReady = null;
+      /* 跨区块写入缓冲: 树冠伸出本区块时, 目标区块可能还没生成 */
+      this.pending = new Map();
+      /* 每帧复用的"附近区块"列表, 避免每帧 new 数组 + sort */
+      this._need = [];
+      this._needR = -1;
+      this._needCX = NaN; this._needCZ = NaN;
     }
 
     key(cx, cz) { return cx + ',' + cz; }
@@ -64,32 +70,30 @@
       if (!c) return false;
       const lx = x & 15, lz = z & 15;
       const i = ((y * CHUNK + lz) * CHUNK) + lx;
-      if (c.blocks[i] === id) return false;
-
-      /* 检测发光变化: 旧方块发光 or 新方块发光 -> 需要全区块重算 */
       const oldId = c.blocks[i];
-      const oldLightEmit = oldId ? MC.Blocks.lightEmit(oldId & 0xFFF) : 0;
-      const newLightEmit = id ? MC.Blocks.lightEmit(id & 0xFFF) : 0;
-      const lightChanged = (oldLightEmit > 0) !== (newLightEmit > 0) || oldLightEmit !== newLightEmit;
+      if (oldId === id) return false;
 
       c.blocks[i] = id;
       c.dirty = true;
+      c.growBounds(y);
 
+      /* 增量光照: 只在光路真的变化时重算该格
+       * (旧实现要么全区块 computeLight、要么整列重算，且只增不减) */
+      const oldType = oldId & 0xFFF, newType = id & 0xFFF;
+      const oldOp = oldType ? MC.Blocks.opacityOf(oldType) : 0;
+      const newOp = newType ? MC.Blocks.opacityOf(newType) : 0;
+      const oldEm = oldType ? MC.Blocks.lightEmit(oldType) : 0;
+      const newEm = newType ? MC.Blocks.lightEmit(newType) : 0;
+      const lightChanged = oldOp !== newOp || oldEm !== newEm;
+      if (lightChanged && c.lit) c.updateLight(i, oldId, id);
+
+      /* 跨区块边界: 邻区块的光照可能受影响, 只能整块重算 (少见) */
       if (lightChanged) {
-        /* 发光方块变化: 需要全区块重算 (代价高但不常见) */
-        c.needsRelight = true;
-      } else {
-        /* 非发光方块变化: 只重算受影响的列 (高效) */
-        c._dirtyColumns = c._dirtyColumns || [];
-        if (!c._dirtyColumns.includes(lx + lz * CHUNK)) {
-          c._dirtyColumns.push(lx + lz * CHUNK);
-        }
+        if (lx === 0) this._relight(cx - 1, cz);
+        if (lx === 15) this._relight(cx + 1, cz);
+        if (lz === 0) this._relight(cx, cz - 1);
+        if (lz === 15) this._relight(cx, cz + 1);
       }
-
-      if (lx === 0) this._relight(cx - 1, cz);
-      if (lx === 15) this._relight(cx + 1, cz);
-      if (lz === 0) this._relight(cx, cz - 1);
-      if (lz === 15) this._relight(cx, cz + 1);
 
       /* 邻居网格更新 */
       if (lx === 0) this._dirty(cx - 1, cz);
@@ -112,6 +116,54 @@
       if (c) c.dirty = true;
     }
 
+    /* ---------- 生成 ---------- */
+    _generate(c) {
+      const res = this.gen.generate(c.cx, c.cz, c.blocks, c.biome);
+      c.heights = res && res.heights ? res.heights : null;
+      c.generated = true;
+      c.updateBounds();
+      this._flushPending(c);           /* 先补写邻居区块伸过来的树 */
+      if (res && res.pending && res.pending.length) this._applyPending(res.pending);
+      c.updateBounds();
+      c.computeLight();
+      c.dirty = true;
+    }
+
+    /** 邻居区块生成时想写进本区块的方块 (跨区块树冠) */
+    _applyPending(list) {
+      for (let k = 0; k < list.length; k += 4) {
+        const x = list[k], y = list[k + 1], z = list[k + 2], id = list[k + 3];
+        const key = (x >> 4) + ',' + (z >> 4);
+        const c = this.chunks.get(key);
+        if (c && c.generated) this._write(c, x, y, z, id);
+        else {
+          let a = this.pending.get(key);
+          if (!a) { a = []; this.pending.set(key, a); }
+          a.push(x, y, z, id);
+        }
+      }
+    }
+
+    _flushPending(c) {
+      const key = c.cx + ',' + c.cz;
+      const a = this.pending.get(key);
+      if (!a) return;
+      this.pending.delete(key);
+      for (let k = 0; k < a.length; k += 4) this._write(c, a[k], a[k + 1], a[k + 2], a[k + 3]);
+    }
+
+    /** 写入一个方块但不覆盖已有内容 (只用于生成期的装饰) */
+    _write(c, x, y, z, id) {
+      if (y < 0 || y >= HEIGHT) return;
+      const i = ((y * CHUNK + (z & 15)) * CHUNK) + (x & 15);
+      if (c.blocks[i] !== 0) return;
+      const old = c.blocks[i];
+      c.blocks[i] = id;
+      if (c.lit) c.updateLight(i, old, id);
+      c.growBounds(y);
+      c.dirty = true;
+    }
+
     /* ---------- 调度 ---------- */
     update(px, pz, dt, renderer) {
       const ccx = Math.floor(px / CHUNK), ccz = Math.floor(pz / CHUNK);
@@ -120,16 +172,21 @@
       const t0 = performance.now();
       const GEN_BUDGET = 7, MESH_BUDGET = 7;
 
-      /* 需要加载的区块列表 (按距离排序) */
-      const need = [];
-      for (let dz = -R - 1; dz <= R + 1; dz++) {
-        for (let dx = -R - 1; dx <= R + 1; dx++) {
-          const d2 = dx * dx + dz * dz;
-          if (d2 > (R + 1) * (R + 1)) continue;
-          need.push([ccx + dx, ccz + dz, d2]);
+      /* 需要加载的区块列表 (按距离排序; 只在中心/半径变化时重建) */
+      if (this._needR !== R || this._needCX !== ccx || this._needCZ !== ccz) {
+        const need = this._need;
+        need.length = 0;
+        for (let dz = -R - 1; dz <= R + 1; dz++) {
+          for (let dx = -R - 1; dx <= R + 1; dx++) {
+            const d2 = dx * dx + dz * dz;
+            if (d2 > (R + 1) * (R + 1)) continue;
+            need.push([ccx + dx, ccz + dz, d2]);
+          }
         }
+        need.sort((a, b) => a[2] - b[2]);
+        this._needR = R; this._needCX = ccx; this._needCZ = ccz;
       }
-      need.sort((a, b) => a[2] - b[2]);
+      const need = this._need;
 
       /* 生成 */
       let generated = 0;
@@ -138,10 +195,7 @@
         let c = this.chunks.get(cx + ',' + cz);
         if (c && c.generated) continue;
         c = this.ensureChunk(cx, cz);
-        c.heights = this.gen.generate(cx, cz, c.blocks, c.biome);
-        c.generated = true;
-        c.computeLight();
-        c.dirty = true;
+        this._generate(c);
         generated++;
         if (this.onChunkReady) this.onChunkReady(c);
       }
@@ -155,15 +209,6 @@
         const c = this.chunks.get(cx + ',' + cz);
         if (!c || !c.generated) continue;
         if (c.needsRelight) { c.computeLight(); c.needsRelight = false; c.dirty = true; }
-        /* 列级增量光照: 只重算受影响的列 */
-        if (c._dirtyColumns && c._dirtyColumns.length) {
-          for (const idx of c._dirtyColumns) {
-            const lx = idx % CHUNK, lz = (idx / CHUNK) | 0;
-            c.relightColumn(lx, lz);
-          }
-          c._dirtyColumns = [];
-          c.dirty = true;
-        }
         if (!c.dirty) continue;
         if (!this.neighborsReady(cx, cz)) continue;
         this.buildChunkMesh(c, renderer);
@@ -206,11 +251,7 @@
       for (let dz = -radius; dz <= radius; dz++) {
         for (let dx = -radius; dx <= radius; dx++) {
           const c = this.ensureChunk(ccx + dx, ccz + dz);
-          if (!c.generated) {
-            c.heights = this.gen.generate(c.cx, c.cz, c.blocks, c.biome);
-            c.generated = true;
-            c.computeLight();
-          }
+          if (!c.generated) this._generate(c);
         }
       }
     }

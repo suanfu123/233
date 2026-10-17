@@ -218,11 +218,18 @@
         }
       }
 
-      /* 岩浆湖 (深层) */
-      for (let y = 4; y < 11; y++) {
-        for (let lz = 0; lz < CHUNK; lz++) for (let lx = 0; lx < CHUNK; lx++) {
-          const i = (y * CHUNK + lz) * CHUNK + lx;
-          if (blocks[i] === 0 && y <= 9) blocks[i] = TY.lava;
+      /* 岩浆: 只在深部空腔(y<=8)里按噪声成湖。
+       * 旧实现把所有 y<=9 的空气直接灌满岩浆，地下几乎是"岩浆海"。 */
+      const LAVA_TOP = 8;
+      for (let y = 1; y <= LAVA_TOP; y++) {
+        for (let lz = 0; lz < CHUNK; lz++) {
+          for (let lx = 0; lx < CHUNK; lx++) {
+            const i = (y * CHUNK + lz) * CHUNK + lx;
+            if (blocks[i] !== 0) continue;
+            const x = x0 + lx, z = z0 + lz;
+            const n = this.nCave.n3(x * 0.02, y * 0.09, z * 0.02);
+            if (y <= 2 || n > 0.3) blocks[i] = TY.lava;
+          }
         }
       }
 
@@ -280,12 +287,13 @@
         }
       }
 
-      /* 树 (含边界余量, 只写入本区块) */
-      this.genTrees(cx, cz, blocks, biomes, heights);
-      return heights;
+      /* 树 (含边界余量): 本区块直接写入, 越界的部分交给目标区块补写 */
+      const pending = [];
+      this.genTrees(cx, cz, blocks, biomes, heights, pending);
+      return { heights, pending };
     },
 
-    genTrees(cx, cz, blocks, biomes, heights) {
+    genTrees(cx, cz, blocks, biomes, heights, pending) {
       const TY = this.TYPES;
       const M = 3;
       for (let dz = -M; dz < CHUNK + M; dz++) {
@@ -309,10 +317,16 @@
           const leaves = { oak: TY.oak_leaves, birch: TY.birch_leaves, spruce: TY.spruce_leaves, jungle: TY.jungle_leaves, acacia: TY.acacia_leaves }[type];
 
           const put = (lx, y, lz, id, overwrite) => {
-            if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK || y < 0 || y >= HEIGHT) return;
-            const i = (y * CHUNK + lz) * CHUNK + lx;
-            if (!overwrite && blocks[i] !== 0 && blocks[i] !== TY.water) return;
-            blocks[i] = id;
+            if (y < 0 || y >= HEIGHT) return;
+            if (lx >= 0 && lx < CHUNK && lz >= 0 && lz < CHUNK) {
+              const i = (y * CHUNK + lz) * CHUNK + lx;
+              if (!overwrite && blocks[i] !== 0 && blocks[i] !== TY.water) return;
+              blocks[i] = id;
+              return;
+            }
+            /* 跨区块: 记成世界坐标, 由目标区块生成后补写 (以前直接丢弃, 树冠被切平) */
+            if (overwrite) return;
+            pending.push(cx * CHUNK + lx, y, cz * CHUNK + lz, id);
           };
 
           const bx = x - cx * CHUNK, bz = z - cz * CHUNK;
@@ -396,7 +410,6 @@
       };
       vein(TY.coal_ore, 14, 6, 110, 6, 0.85);
       vein(TY.iron_ore, 12, 5, 68, 4, 0.8);
-      vein(TY.copperOre || TY.iron_ore, 0, 0, 0, 0);
       vein(TY.gold_ore, 3, 5, 34, 3, 0.7);
       vein(TY.redstone_ore, 6, 4, 18, 4, 0.7);
       vein(TY.diamond_ore, 2, 3, 16, 3, 0.6);
