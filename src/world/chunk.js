@@ -312,8 +312,8 @@
             const def = B.byType[type];
             if (!def) continue;
 
-            const vi = B.variantIndex(type, rot);
-            const geo = B.geo(type, vi);
+            const vi = def.liquid ? 0 : B.variantIndex(type, rot);
+            const geo = def.liquid ? B.fluidGeo(type, rot) : B.geo(type, vi);
             if (!geo || !geo.quads.length) continue;
 
             const gx = cx0 + x, gy = y, gz = cz0 + z;
@@ -343,7 +343,12 @@
                 if (nb !== 0) {
                   const ntype = nb & 0xFFF;
                   if (B.occludes(ntype)) continue;
-                  if (ntype === type && (def.liquid || def.render === 'translucent')) continue;
+                  if (ntype === type) {
+                    if (def.liquid) {
+                      /* 邻居液面不低于自己时才剔除, 否则流动的水/岩浆会露出缺口 */
+                      if (B.fluidHeight(nb >> 12) >= B.fluidHeight(rot) - 1e-4) continue;
+                    } else if (def.render === 'translucent') continue;
+                  }
                 }
               }
 

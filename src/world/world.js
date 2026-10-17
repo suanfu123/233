@@ -23,6 +23,8 @@
       this._need = [];
       this._needR = -1;
       this._needCX = NaN; this._needCZ = NaN;
+      /* 流体模拟 (水/岩浆的流动与积水) */
+      this.fluid = new MC.FluidSim(this);
     }
 
     key(cx, cz) { return cx + ',' + cz; }
@@ -76,6 +78,15 @@
       c.blocks[i] = id;
       c.dirty = true;
       c.growBounds(y);
+
+      /* 液体出现/消失: 唤醒流体模拟 */
+      if (this.fluid) {
+        const oLq = (oldId & 0xFFF) !== 0 && MC.Blocks.byType[oldId & 0xFFF] &&
+          MC.Blocks.byType[oldId & 0xFFF].liquid;
+        const nLq = (id & 0xFFF) !== 0 && MC.Blocks.byType[id & 0xFFF] &&
+          MC.Blocks.byType[id & 0xFFF].liquid;
+        if (oLq || nLq) this.fluid.wakeAround(x, y, z);
+      }
 
       /* 增量光照: 只在光路真的变化时重算该格
        * (旧实现要么全区块 computeLight、要么整列重算，且只增不减) */
@@ -171,6 +182,9 @@
       const R = this.renderDistance;
       const t0 = performance.now();
       const GEN_BUDGET = 7, MESH_BUDGET = 7;
+
+      /* 流体: 每帧推进一点点, 只在有活动格子时才做事 */
+      if (this.fluid) this.fluid.update(dt || 0);
 
       /* 需要加载的区块列表 (按距离排序; 只在中心/半径变化时重建) */
       if (this._needR !== R || this._needCX !== ccx || this._needCZ !== ccz) {

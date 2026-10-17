@@ -227,6 +227,7 @@
             quads.push({
               p, uv: t,
               layer: tex.layer, arr: tex.arr,
+              name: f.tex,
               tint: f.tint,
               shade: el.shade !== false,
               cull,
@@ -242,6 +243,65 @@
       const g = { quads, model: variant.model, variant };
       b._geo[variantIdx] = g;
       return g;
+    },
+
+    /** 液体几何: level 0 = 源头 (液面 14/16), 1..7 = 流动 (逐级降低) */
+    fluidGeo(type, level) {
+      const b = Blocks.byType[type];
+      if (!b) return null;
+      const lv = level < 0 ? 0 : (level > 7 ? 7 : level | 0);
+      if (!b._fluid) b._fluid = [];
+      const cached = b._fluid[lv];
+      if (cached) return cached;
+
+      const h = lv === 0 ? 0.875 : 0.875 * (8 - lv) / 8;
+      const lava = b.id === 'lava';
+      const flowName = lava ? 'block/lava_flow' : 'block/water_flow';
+      const stillName = lava ? 'block/lava_still' : 'block/water_still';
+      let tex = Blocks.texLookup ? Blocks.texLookup(stillName) : null;
+      if (lv > 0 && Blocks.texLookup) {
+        const flow = Blocks.texLookup(flowName);
+        if (flow && flow.index > 0) tex = flow;
+      }
+      if (!tex) tex = { layer: 0, arr: 0, index: 0 };
+
+      const quads = [];
+      const US = [0, 1, 1, 0], VS = [0, 0, 1, 1];
+      for (const fname of FACE_NAME) {
+        const fi = FACE_INDEX[fname];
+        const corners = FACE_VERTS[fname];
+        const p = new Float32Array(12), t = new Float32Array(8);
+        for (let i = 0; i < 4; i++) {
+          const c = corners[i];
+          p[i * 3] = c[0] ? 1 : 0;
+          p[i * 3 + 1] = c[1] ? h : 0;
+          p[i * 3 + 2] = c[2] ? 1 : 0;
+          t[i * 2] = US[i]; t[i * 2 + 1] = VS[i];
+        }
+        if (fi === 0 || fi === 1) {
+          const rp = new Float32Array(12), rt = new Float32Array(8);
+          for (let i = 0; i < 4; i++) {
+            const s = (4 - i) % 4;
+            rp[i * 3] = p[s * 3]; rp[i * 3 + 1] = p[s * 3 + 1]; rp[i * 3 + 2] = p[s * 3 + 2];
+            rt[i * 2] = t[s * 2]; rt[i * 2 + 1] = t[s * 2 + 1];
+          }
+          p.set(rp); t.set(rt);
+        }
+        quads.push({
+          p, uv: t, layer: tex.layer, arr: tex.arr, tint: -1, shade: true,
+          name: (lv > 0 ? flowName : stillName),
+          cull: fi, n: FACE_NORMAL[fi], face: fi, ao: false, full: false
+        });
+      }
+      const g = { quads, model: 'fluid', variant: { model: 'fluid' } };
+      b._fluid[lv] = g;
+      return g;
+    },
+
+    /** 液体液面高度 (0..1) */
+    fluidHeight(level) {
+      const lv = level < 0 ? 0 : (level > 7 ? 7 : level | 0);
+      return lv === 0 ? 0.875 : 0.875 * (8 - lv) / 8;
     },
 
     /** 碰撞盒 (方块局部 0..1) */

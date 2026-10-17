@@ -19,6 +19,7 @@
     clouds: 'environment/clouds.png',
     optionsBg: 'gui/options_background.png',
     inventory: 'gui/container/inventory.png',
+    creative: 'gui/container/creative_inventory/tab_items.png',
     tabs: 'gui/container/creative_inventory/tabs.png',
     title: 'gui/title/minecraft.png',
     vignette: 'misc/vignette.png',
@@ -61,6 +62,11 @@
     async load(gl, onProgress) {
       const A = window.MC_ASSETS;
       const names = A.textures;
+      /* 流体流动贴图没有被任何方块模型引用 (水量/岩浆由流体渲染器单独处理),
+       * 这里显式补进纹理数组, 否则流动态只能退回静止贴图。 */
+      for (const extra of ['block/water_flow', 'block/lava_flow']) {
+        if (names.indexOf(extra) < 0) names.push(extra);
+      }
       const total = names.length + Object.keys(GUI_FILES).length + 2;
       let done = 0;
       const tick = (label) => { done++; if (onProgress) onProgress(done, total, label); };
@@ -92,8 +98,13 @@
         layerOf[i] = layer; arrOf[i] = arr;
         cx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
         if (img) {
-          const sw = Math.min(img.width, TEX_SIZE), sh = Math.min(img.height, TEX_SIZE);
-          cx.drawImage(img, 0, 0, sw, sh, 0, 0, TEX_SIZE, TEX_SIZE);
+          /* 动画贴图是"首帧在顶部、竖向排列"的条带, 且帧不一定是 16x16
+           * (1.16 的 water_flow / lava_flow 是 32xN, 帧 32x32)。
+           * 取左上角一个正方形帧, 再缩放到 16x16 进图集。 */
+          const fs = Math.min(img.width, img.height) || TEX_SIZE;
+          cx.imageSmoothingEnabled = fs > TEX_SIZE;
+          cx.drawImage(img, 0, 0, fs, fs, 0, 0, TEX_SIZE, TEX_SIZE);
+          cx.imageSmoothingEnabled = false;
         } else {
           cx.fillStyle = '#000'; cx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
           cx.fillStyle = '#f0f'; cx.fillRect(0, 0, 8, 8); cx.fillRect(8, 8, 8, 8);
