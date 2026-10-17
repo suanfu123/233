@@ -154,9 +154,10 @@
       const c0 = document.createElement('canvas');
       c0.width = 16; c0.height = 16;
       const c = c0.getContext('2d');
-      c.imageSmoothingEnabled = false;
-      /* 只取第一帧: 竖向动画贴图 (16xN) 的第 0 帧就是顶部 16x16 */
-      c.drawImage(img, 0, 0, 16, 16, 0, 0, 16, 16);
+      c.imageSmoothingEnabled = img.width > 16;
+      /* 只取第一帧: 竖向动画贴图 (16xN / 32xN) 的第 0 帧在左上角, 取正方形 */
+      const fs = Math.min(img.width, img.height) || 16;
+      c.drawImage(img, 0, 0, fs, fs, 0, 0, 16, 16);
       this._frames.set(name, c0);
       return c0;
     }
@@ -191,8 +192,8 @@
       return color ? this.tintedTex(q.name, color) : this.frameTex(q.name);
     }
 
-    iconCanvas(type, vi) {
-      const key = type + ':' + vi;
+    iconCanvas(type, vi, px) {
+      const key = type + ':' + vi + ':' + px;
       let cached = this._icons.get(key);
       if (cached !== undefined) return cached;
       this._icons.set(key, null);
@@ -202,7 +203,7 @@
       if (!geo || !geo.quads.length) return null;
 
       const cv = document.createElement('canvas');
-      cv.width = 16; cv.height = 16;
+      cv.width = px; cv.height = px;
       const c = cv.getContext('2d');
       c.imageSmoothingEnabled = false;
 
@@ -210,26 +211,27 @@
       if (def.kind === 'plant') {
         const q = geo.quads[0];
         const img = this.faceTex(q, def);
-        if (img) c.drawImage(img, 0, 0, 16, 16, 0, 0, 16, 16);
+        if (img) c.drawImage(img, 0, 0, 16, 16, 0, 0, px, px);
         this._icons.set(key, cv);
         return cv;
       }
 
-      /* --- 其余: 真实模型 + 2:1 等轴测投影 --- */
-      const P = (px, py, pz) => [(px - pz) * 8 + 8, (px + pz) * 4 - py * 8 + 8];
+      /* --- 其余: 真实模型 + 2:1 等轴测投影, 按设备像素渲染 ---
+       * 先在 16x16 里画再放大到槽位是"糊"的根源: 一个立方体的侧面在 16x16 里
+       * 只有 16x8 像素, 16x16 的贴图要先丢掉一半行, 再被放大 2~3 倍。
+       * 现在按目标设备像素直接渲染 (px), 贴图 1:1 落到像素上。 */
+      const S = px / 16;
+      const half = px / 2;
+      const P = (ax, ay, az) => [(ax - az) * 8 * S + half, (ax + az) * 4 * S - ay * 8 * S + half];
       const items = [];
       for (let i = 0; i < geo.quads.length; i++) {
         const q = geo.quads[i];
-        const n = q.n || [0, 1, 0];
-        const twoSided = q.cull < 0;
-        /* 只画朝向相机的面 (相机在 (+1,+1,+1) 方向) */
-        if (!twoSided && (n[0] + n[1] + n[2]) <= 0) continue;
         const pts = [];
         let depth = 0;
         for (let v = 0; v < 4; v++) {
-          const px = q.p[v * 3], py = q.p[v * 3 + 1], pz = q.p[v * 3 + 2];
-          pts.push(P(px, py, pz));
-          depth += px + py + pz;
+          const ax = q.p[v * 3], ay = q.p[v * 3 + 1], az = q.p[v * 3 + 2];
+          pts.push(P(ax, ay, az));
+          depth += ax + ay + az;
         }
         items.push({ q, pts, depth: depth / 4 });
       }
@@ -284,12 +286,16 @@
     }
 
     icon(type, x, y, s, vi) {
-      const cv = this.iconCanvas(type, vi | 0);
-      if (!cv) return;
       const ctx = this.ctx;
+      /* 当前变换的缩放 (DPR × 界面缩放), 图标按设备像素渲染才不会发糊 */
+      let k = 1;
+      try { const m = ctx.getTransform(); if (m && Math.abs(m.a) > 1e-6) k = Math.abs(m.a); } catch (e) { k = 1; }
+      const px = Math.max(16, Math.round(16 * s * k));
+      const cv = this.iconCanvas(type, vi | 0, px);
+      if (!cv) return;
       const smooth = ctx.imageSmoothingEnabled;
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(cv, 0, 0, 16, 16, x, y, 16 * s, 16 * s);
+      ctx.drawImage(cv, 0, 0, px, px, x, y, 16 * s, 16 * s);
       ctx.imageSmoothingEnabled = smooth;
     }
 
