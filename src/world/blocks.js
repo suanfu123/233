@@ -93,10 +93,11 @@
     return [x, y, z];
   }
 
-  /* ---------- 几何缓存 ---------- */
-  const geoCache = new Map();
-  const boxCache = new Map();
-
+  /* ---------- 几何缓存 ----------
+   * 缓存挂在方块定义自身的 _geo / _boxes 数组上 (下标 = 变体序号)。
+   * 旧实现用 type*16+variantIdx 当 Map 键，楼梯这类变体数 40 的方块会
+   * 溢出到相邻方块的键区间，导致 264 处串号 (橡木台阶拿到紫珀楼梯的模型)。
+   */
   const Blocks = MC.Blocks = {
     FACE_NORMAL, FACE_NAME, FACE_INDEX,
     AIR: 0,
@@ -117,12 +118,13 @@
           light: b.light, tint: b.tint, liquid: b.liquid, hardness: b.hardness,
           rotMap: b.rotMap, variants: b.variants, boxes: b.boxes,
           iconTop: b.iconTop, iconSide: b.iconSide, iconAll: b.iconAll,
-          _geo: []
+          _geo: [],
+          _boxes: []
         };
         Blocks.byType[b.type] = def;
         Blocks.byName[b.id] = def;
       }
-      Blocks.AIR_DEF = { type: 0, id: 'air', name: 'Air', kind: 'cube', render: 'none', solid: false, opacity: 0, light: 0, tint: null, liquid: false, variants: [], rotMap: [0], iconTop: null, iconSide: null, _geo: [] };
+      Blocks.AIR_DEF = { type: 0, id: 'air', name: 'Air', kind: 'cube', render: 'none', solid: false, opacity: 0, light: 0, tint: null, liquid: false, variants: [], rotMap: [0], iconTop: null, iconSide: null, _geo: [], _boxes: [] };
       return Blocks;
     },
 
@@ -151,9 +153,8 @@
     geo(type, variantIdx) {
       const b = Blocks.byType[type];
       if (!b) return null;
-      const key = type * 16 + variantIdx;
-      let g = geoCache.get(key);
-      if (g) return g;
+      const cached = b._geo[variantIdx];
+      if (cached) return cached;
 
       const variant = b.variants[variantIdx] || b.variants[0];
       const model = A.models[variant.model];
@@ -238,8 +239,8 @@
           }
         }
       }
-      g = { quads, model: variant.model, variant };
-      geoCache.set(key, g);
+      const g = { quads, model: variant.model, variant };
+      b._geo[variantIdx] = g;
       return g;
     },
 
@@ -248,9 +249,8 @@
       const b = Blocks.byType[type];
       if (!b || !b.solid) return null;
       const vi = Blocks.variantIndex(type, rot);
-      const key = type * 16 + vi;
-      let bx = boxCache.get(key);
-      if (bx) return bx;
+      const cached = b._boxes[vi];
+      if (cached) return cached;
       const variant = b.variants[vi] || b.variants[0];
       const model = A.models[variant.model];
       const out = [];
@@ -279,10 +279,10 @@
           }
           rotated.push([mnx, mny, mnz, mxx, mxy, mxz]);
         }
-        boxCache.set(key, rotated);
+        b._boxes[vi] = rotated;
         return rotated;
       }
-      boxCache.set(key, out);
+      b._boxes[vi] = out;
       return out;
     },
 
