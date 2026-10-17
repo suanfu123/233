@@ -15,6 +15,15 @@
 
   const CATEGORIES = ['建筑', '自然', '红石', '功能', '装饰'];
 
+  /* 图标染色 (原版平原生物群系色), 用于顶面/树叶/藤蔓这类灰度贴图 */
+  const ICON_TINT = {
+    grass: 'rgb(145,189,89)',    // 0x91BD59
+    foliage: 'rgb(119,171,47)',  // 0x77AB2F
+    water: 'rgb(63,118,228)'     // 0x3F76E4
+  };
+  /* 面序号 0..5 = down/up/north/south/west/east */
+  const FACE_SHADE6 = [0.5, 1.0, 0.8, 0.8, 0.6, 0.6];
+
   function classify(id) {
     if (/redstone|piston|dispenser|dropper|observer|target|tnt|lamp|lever|button|rail|hopper|note_block|jukebox|comparator|repeater|redstone_torch|redstone_lamp|redstone_wire|tripwire_hook|trapped_chest|daylight_detector|sculk_sensor/.test(id)) return 2;
     if (/banner|sign|flower_pot|bed|skull|head|candle|cake|armor_stand|item_frame|painting|lead|bell|conduit|beacon/.test(id)) return 4;
@@ -47,6 +56,10 @@
       this.toast = null;
       this.deathMsg = '';
       this.fpsHistory = [];
+      /* 图标缓存: 贴图帧 / 染色帧 / 整个图标 */
+      this._frames = new Map();
+      this._tints = new Map();
+      this._icons = new Map();
       this.buildCategories();
       this.resize();
     }
@@ -57,7 +70,7 @@
       for (const b of MC.Blocks.byType) {
         if (!b || seen.has(b.id)) continue;
         seen.add(b.id);
-        if (b.id === 'water' || b.id === 'lava' || b.id === 'bedrock' || b.id === 'air' || b.id === 'cave_air' || b.id === 'void_air' || b.id === 'barrier' || b.id === 'piston_head' || b.id === 'moving_piston' || b.id === 'light') continue;
+        if (b.id === 'bedrock' || b.id === 'air' || b.id === 'cave_air' || b.id === 'void_air' || b.id === 'barrier' || b.id === 'piston_head' || b.id === 'moving_piston' || b.id === 'light') continue;
         this.categories[classify(b.id)].push(b.type);
       }
       this.allBlocks = this.categories.reduce((a, c) => a.concat(c), []);
@@ -121,106 +134,163 @@
       ctx.fillRect(x, y + 17, 18, 1); ctx.fillRect(x + 17, y, 1, 18);
     }
 
-    /* ---------- 方块图标 (等轴测) ---------- */
-    icon(type, x, y, s) {
-      const ctx = this.ctx;
+    /* ---------- 方块图标 ----------
+     * 直接用方块模型的多边形做等轴测投影, 而不是硬编码立方体。
+     * 这里修掉了旧实现的几个致命问题:
+     *   1. drawImage(img, x, y, 16, 16) 是 5 参数版, 会把整张图缩放成 16x16;
+     *      水/岩浆/海草/海带是 16x512 这类竖向动画条, 于是被压成一条糊掉 ->
+     *      "所有方块都有些扁"。现在统一只取第一帧 16x16。
+     *   2. 草方块顶面/树叶/藤蔓/睡莲的贴图本身是灰度的, 必须乘生物群系染色,
+     *      否则图标是灰的。
+     *   3. 草方块侧面贴图在原版里本来就是"草在上", 旧的翻转 hack 把它倒过来了。
+     *   4. 玻璃板/栅栏/台阶等非完整方块按模型真实形状绘制, 不再是平板。
+     */
+    frameTex(name) {
+      if (!name) return null;
+      let cv = this._frames.get(name);
+      if (cv !== undefined) return cv;
+      const img = this.tex.img(name);
+      if (!img) { this._frames.set(name, null); return null; }
+      const c0 = document.createElement('canvas');
+      c0.width = 16; c0.height = 16;
+      const c = c0.getContext('2d');
+      c.imageSmoothingEnabled = false;
+      /* 只取第一帧: 竖向动画贴图 (16xN) 的第 0 帧就是顶部 16x16 */
+      c.drawImage(img, 0, 0, 16, 16, 0, 0, 16, 16);
+      this._frames.set(name, c0);
+      return c0;
+    }
+
+    tintedTex(name, color) {
+      const key = name + '|' + color;
+      let cv = this._tints.get(key);
+      if (cv !== undefined) return cv;
+      const src = this.frameTex(name);
+      if (!src) { this._tints.set(key, null); return null; }
+      const c0 = document.createElement('canvas');
+      c0.width = 16; c0.height = 16;
+      const c = c0.getContext('2d');
+      c.imageSmoothingEnabled = false;
+      c.drawImage(src, 0, 0);
+      c.globalCompositeOperation = 'multiply';
+      c.fillStyle = color;
+      c.fillRect(0, 0, 16, 16);
+      c.globalCompositeOperation = 'destination-in';
+      c.drawImage(src, 0, 0);
+      this._tints.set(key, c0);
+      return c0;
+    }
+
+    /** 该面实际要用的贴图 (含染色) */
+    faceTex(q, def) {
+      if (!q || !q.name) return null;
+      let color = null;
+      if (def.liquid) color = def.id === 'water' ? ICON_TINT.water : null;
+      else if (q.tint >= 0 && def.tint === 'grass') color = ICON_TINT.grass;
+      else if (q.tint >= 0 && def.tint === 'foliage') color = ICON_TINT.foliage;
+      return color ? this.tintedTex(q.name, color) : this.frameTex(q.name);
+    }
+
+    iconCanvas(type, vi) {
+      const key = type + ':' + vi;
+      let cached = this._icons.get(key);
+      if (cached !== undefined) return cached;
+      this._icons.set(key, null);
       const def = MC.Blocks.byType[type];
-      if (!def) return;
-      const top = this.tex.img(def.iconTop);
-      const side = this.tex.img(def.iconSide);
-      const all = this.tex.img(def.iconAll);
-      if (!top && !side && !all) {
-        ctx.fillStyle = '#f0f';
-        ctx.fillRect(x, y, 16 * s, 16 * s);
-        return;
-      }
-      const kind = def.kind;
+      if (!def) return null;
+      const geo = def.liquid ? MC.Blocks.fluidGeo(type, 0) : MC.Blocks.geo(type, vi);
+      if (!geo || !geo.quads.length) return null;
 
-      /* 非完整方块: 平面渲染 */
-      if (kind === 'plant' || kind === 'none' || kind === 'facing' || (!top && !all)) {
-        const img = all || side || top;
-        if (img) ctx.drawImage(img, x, y, 16 * s, 16 * s);
-        return;
+      const cv = document.createElement('canvas');
+      cv.width = 16; cv.height = 16;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+
+      /* --- 十字/平面植物: 贴图直接铺满 (原版物品栏也是平铺的) --- */
+      if (def.kind === 'plant') {
+        const q = geo.quads[0];
+        const img = this.faceTex(q, def);
+        if (img) c.drawImage(img, 0, 0, 16, 16, 0, 0, 16, 16);
+        this._icons.set(key, cv);
+        return cv;
       }
 
-      /* 草方块侧面翻转 */
-      let sideTex = side;
-      if (def.id === 'grass_block') {
-        if (!Hud._grassFlipCache) {
-          const cv = document.createElement('canvas');
-          cv.width = 16; cv.height = 16;
-          const cx = cv.getContext('2d');
-          cx.translate(0, 16); cx.scale(1, -1);
-          if (side) cx.drawImage(side, 0, 0);
-          Hud._grassFlipCache = cv;
+      /* --- 其余: 真实模型 + 2:1 等轴测投影 --- */
+      const P = (px, py, pz) => [(px - pz) * 8 + 8, (px + pz) * 4 - py * 8 + 8];
+      const items = [];
+      for (let i = 0; i < geo.quads.length; i++) {
+        const q = geo.quads[i];
+        const n = q.n || [0, 1, 0];
+        const twoSided = q.cull < 0;
+        /* 只画朝向相机的面 (相机在 (+1,+1,+1) 方向) */
+        if (!twoSided && (n[0] + n[1] + n[2]) <= 0) continue;
+        const pts = [];
+        let depth = 0;
+        for (let v = 0; v < 4; v++) {
+          const px = q.p[v * 3], py = q.p[v * 3 + 1], pz = q.p[v * 3 + 2];
+          pts.push(P(px, py, pz));
+          depth += px + py + pz;
         }
-        sideTex = Hud._grassFlipCache;
+        items.push({ q, pts, depth: depth / 4 });
       }
+      items.sort((a, b) => a.depth - b.depth);   // 远的先画
 
-      const topTex = top || side;
+      for (let k = 0; k < items.length; k++) {
+        const it = items[k];
+        const q = it.q, pts = it.pts;
+        const img = this.faceTex(q, def);
+        if (!img) continue;
+        const u0 = q.uv[0], v0 = q.uv[1];
+        const du1 = (q.uv[2] - u0) * 16, dv1 = (q.uv[3] - v0) * 16;
+        const du3 = (q.uv[6] - u0) * 16, dv3 = (q.uv[7] - v0) * 16;
+        const det = du1 * dv3 - du3 * dv1;
+        if (Math.abs(det) < 1e-6) continue;
+        const sx1 = pts[1][0] - pts[0][0], sy1 = pts[1][1] - pts[0][1];
+        const sx3 = pts[3][0] - pts[0][0], sy3 = pts[3][1] - pts[0][1];
+        const a = (sx1 * dv3 - sx3 * dv1) / det;
+        const cc = (du1 * sx3 - du3 * sx1) / det;
+        const b = (sy1 * dv3 - sy3 * dv1) / det;
+        const d = (du1 * sy3 - du3 * sy1) / det;
+        const e = pts[0][0] - (a * u0 * 16 + cc * v0 * 16);
+        const f = pts[0][1] - (b * u0 * 16 + d * v0 * 16);
 
-      /* 绘制一个面: 把16x16贴图映射到四边形 */
-      const quad = (tex, x0, y0, x1, y1, x2, y2, x3, y3, dark) => {
-        if (!tex) return;
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.lineTo(x3, y3);
-        ctx.closePath();
-        ctx.clip();
-        /* 仿射变换: 16x16 -> 四边形 */
-        ctx.transform(
-          (x1 - x0) / 16, (y1 - y0) / 16,
-          (x3 - x0) / 16, (y3 - y0) / 16,
-          x0, y0
-        );
-        ctx.drawImage(tex, 0, 0, 16, 16);
-        ctx.restore();
-        if (dark > 0) {
-          ctx.save();
-          ctx.beginPath();
-          ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
-          ctx.lineTo(x2, y2); ctx.lineTo(x3, y3);
-          ctx.closePath();
-          ctx.fillStyle = 'rgba(0,0,0,' + dark + ')';
-          ctx.fill();
-          ctx.restore();
+        c.save();
+        c.beginPath();
+        c.moveTo(pts[0][0], pts[0][1]);
+        c.lineTo(pts[1][0], pts[1][1]);
+        c.lineTo(pts[2][0], pts[2][1]);
+        c.lineTo(pts[3][0], pts[3][1]);
+        c.closePath();
+        c.clip();
+        c.setTransform(a, b, cc, d, e, f);
+        c.drawImage(img, 0, 0);
+        c.restore();
+
+        /* 面向光线的明暗 (与原版物品栏一致: 顶 1.0 / 左 0.8 / 右 0.6) */
+        const sh = FACE_SHADE6[q.face];
+        if (sh < 0.999) {
+          c.beginPath();
+          c.moveTo(pts[0][0], pts[0][1]);
+          c.lineTo(pts[1][0], pts[1][1]);
+          c.lineTo(pts[2][0], pts[2][1]);
+          c.lineTo(pts[3][0], pts[3][1]);
+          c.closePath();
+          c.fillStyle = 'rgba(0,0,0,' + (1 - sh).toFixed(3) + ')';
+          c.fill();
         }
-      };
+      }
+      this._icons.set(key, cv);
+      return cv;
+    }
 
-      /*
-       * 等轴测立方体, 填满 16x16
-       * 顶面菱形: (0,4) (8,0) (16,4) (8,8)    — 16宽 x 8高
-       * 左面:     (0,4) (8,8) (8,16) (0,12)   — 8宽 x 8高
-       * 右面:     (8,8) (16,4) (16,12) (8,16) — 8宽 x 8高
-       * 总范围: x=0..16, y=0..16
-       */
-      const bx = x, by = y;
-      const hw = 8 * s;
-      const hh = 4 * s;
-
-      /* 顶面 */
-      quad(topTex,
-        bx, by + hh,
-        bx + hw, by,
-        bx + 2 * hw, by + hh,
-        bx + hw, by + 2 * hh, 0);
-
-      /* 左面 */
-      quad(sideTex,
-        bx, by + hh,
-        bx + hw, by + 2 * hh,
-        bx + hw, by + 2 * hh + 8 * s,
-        bx, by + hh + 8 * s, 0.22);
-
-      /* 右面 */
-      quad(sideTex,
-        bx + hw, by + 2 * hh,
-        bx + 2 * hw, by + hh,
-        bx + 2 * hw, by + hh + 8 * s,
-        bx + hw, by + 2 * hh + 8 * s, 0.42);
+    icon(type, x, y, s, vi) {
+      const cv = this.iconCanvas(type, vi | 0);
+      if (!cv) return;
+      const ctx = this.ctx;
+      const smooth = ctx.imageSmoothingEnabled;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(cv, 0, 0, 16, 16, x, y, 16 * s, 16 * s);
+      ctx.imageSmoothingEnabled = smooth;
     }
 
     /* ---------- 主绘制 ---------- */
@@ -390,94 +460,151 @@
       F().draw(ctx, t2, Math.round(w / 2 - F().width(t2, 1) / 2), h / 2 + 10, { scale: 1, color: '#ffff55', shadow: true });
     }
 
-    /* ---------- 物品栏 ---------- */
+    /* ---------- 物品栏 (创造模式) ----------
+     * 面板/槽位/标签全部使用原版 GUI 贴图:
+     *   gui/container/creative_inventory/tab_items.png  195x136, 槽位已烘焙在图里
+     *     -> 9x5 主格位于 (9,18), 步长 18; 快捷栏一行位于 (9,112)
+     *   gui/container/creative_inventory/tabs.png       28x32 x 6 个标签, 第二排 (y=32) 是选中态
+     */
+    invLayout() {
+      const pw = 195, ph = 136;
+      return {
+        x: Math.round((this.w - pw) / 2),
+        y: Math.round((this.h - ph) / 2) + 10,
+        w: pw, h: ph,
+        gridX: 9, gridY: 18, barY: 112,
+        slot: 18, cols: 9, rows: 5
+      };
+    }
+
+    slotFace(x, y, s) {
+      const ctx = this.ctx;
+      ctx.fillStyle = '#8b8b8b';
+      ctx.fillRect(x, y, s, s);
+      ctx.fillStyle = 'rgba(55,55,55,0.9)';
+      ctx.fillRect(x, y, s, 1); ctx.fillRect(x, y, 1, s);
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillRect(x, y + s - 1, s, 1); ctx.fillRect(x + s - 1, y, 1, s);
+    }
+
     drawInventory(w, h, game) {
       const ctx = this.ctx;
-      const cols = 9, rows = 5;
-      const slot = 18, pad = 1;
-      const gridW = cols * (slot + pad) - pad;
-      const panelW = gridW + 12;
-      const panelH = rows * (slot + pad) - pad + 34;
-      const px = Math.round((w - panelW) / 2), py = Math.round((h - panelH) / 2) - 8;
-      this.invRect = { x: px, y: py, w: panelW, h: panelH };
-
-      this.panel(px, py, panelW, panelH);
-      F().draw(ctx, '创造模式物品栏', px + 6, py + 4, { scale: 1, color: '#dddddd', shadow: true });
-
-      /* 分类标签 */
-      const tabsY = py - 16;
+      const L = this.invLayout();
+      const px = L.x, py = L.y, pw = L.w, ph = L.h, cols = L.cols, rows = L.rows;
+      const slot = L.slot;
+      const gui = this.tex.gui;
+      this.invRect = { x: px, y: py, w: pw, h: ph };
+      this.slotRects = [];
       this.tabRects = [];
-      for (let i = 0; i < CATEGORIES.length; i++) {
-        const tw = F().width(CATEGORIES[i], 1) + 12;
-        const tx = px + 4 + i * 0;
-        const prev = this.tabRects[this.tabRects.length - 1];
-        const x = prev ? prev.x + prev.w + 2 : px + 4;
-        const active = i === this.category;
-        const hover = this.mouseX >= x && this.mouseX <= x + tw && this.mouseY >= tabsY && this.mouseY <= tabsY + 14;
-        ctx.fillStyle = active ? '#8b8b8b' : (hover ? '#6a6a6a' : '#3c3c3c');
-        ctx.fillRect(x, tabsY, tw, active ? 18 : 14);
-        ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-        ctx.strokeRect(x + 0.5, tabsY + 0.5, tw - 1, (active ? 18 : 14) - 1);
-        F().draw(ctx, CATEGORIES[i], x + 6, tabsY + (active ? 4 : 3), { scale: 1, color: active ? '#ffffff' : '#c8c8c8', shadow: true });
-        this.tabRects.push({ x, y: tabsY, w: tw, h: 18, i });
-      }
+
+      /* 背景压暗 */
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0, 0, w, h);
 
       const list = this.categories[this.category];
       const perPage = cols * rows;
-      const maxScroll = Math.max(0, Math.ceil(list.length / perPage) - 1);
-      this.scroll = MC.clamp(this.scroll, 0, maxScroll);
+      const pages = Math.max(1, Math.ceil(list.length / perPage));
+      this.scroll = MC.clamp(this.scroll, 0, pages - 1);
       const start = this.scroll * perPage;
 
-      this.slotRects = [];
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          const idx = start + r * cols + c;
-          const sx = px + 6 + c * (slot + pad), sy = py + 16 + r * (slot + pad);
-          this.slotBg(sx, sy);
-          if (idx < list.length) {
-            const type = list[idx];
-            this.icon(type, sx + 1, sy + 1, 1);
-            this.slotRects.push({ x: sx, y: sy, w: slot, h: slot, type });
-            if (this.mouseX >= sx && this.mouseX <= sx + slot && this.mouseY >= sy && this.mouseY <= sy + slot) {
-              this.hoverSlot = idx;
-              const def = MC.Blocks.byType[type];
-              const name = def ? def.name : '?';
-              const tw = F().width(name, 1);
-              const tx = MC.clamp(this.mouseX + 8, 0, w - tw - 6), ty = this.mouseY - 14;
-              ctx.fillStyle = 'rgba(16,0,16,0.92)';
-              ctx.fillRect(tx - 3, ty - 2, tw + 6, 13);
-              ctx.strokeStyle = 'rgba(90,30,140,0.9)';
-              ctx.strokeRect(tx - 2.5, ty - 1.5, tw + 5, 12);
-              F().draw(ctx, name, tx, ty + 1, { scale: 1, color: '#ffffff', shadow: true });
-            }
-          }
-        }
+      /* ---- 分类标签: 先画, 让面板盖住标签底部 4px (原版就是这样接缝的) ---- */
+      const tabW = 28, tabH = 28;
+      const tabsW = CATEGORIES.length * tabW;
+      const tx0 = px + Math.round((pw - tabsW) / 2);
+      for (let i = 0; i < CATEGORIES.length; i++) {
+        const active = i === this.category;
+        const tx = tx0 + i * tabW;
+        const ty = py - (active ? tabH : tabH - 4);
+        if (gui.tabs) ctx.drawImage(gui.tabs, (i % 6) * tabW, active ? 32 : 0, tabW, tabH, tx, ty, tabW, tabH);
+        else { ctx.fillStyle = active ? '#c6c6c6' : '#8b8b8b'; ctx.fillRect(tx, ty, tabW, tabH); }
+        const label = CATEGORIES[i];
+        F().draw(ctx, label, tx + Math.round((tabW - F().width(label, 1)) / 2), ty + 10,
+          { scale: 1, color: active ? '#3a3a3a' : '#595959' });
+        this.tabRects.push({ x: tx, y: ty, w: tabW, h: tabH - 4, i });
       }
 
-      /* 底部: 快捷栏 */
-      const hy = py + panelH - 22;
-      F().draw(ctx, '快捷栏', px + 6, hy - 12, { scale: 1, color: '#aaaaaa', shadow: true });
+      /* ---- 主面板 (槽位已烘焙在贴图里) ---- */
+      if (gui.creative) {
+        ctx.drawImage(gui.creative, 0, 0, pw, ph, px, py, pw, ph);
+      } else {
+        ctx.fillStyle = '#c6c6c6';
+        ctx.fillRect(px, py, pw, ph);
+      }
+
+      F().draw(ctx, '创造模式物品栏', px + 8, py + 6, { scale: 1, color: '#404040' });
+      const pg = (this.scroll + 1) + '/' + pages;
+      F().draw(ctx, pg, px + 168 - F().width(pg, 1), py + 6, { scale: 1, color: '#404040' });
+
+      /* ---- 物品格 9x5 ---- */
+      const mx = this.mouseX, my = this.mouseY;
+      this.hoverSlot = -1;
+      const gx = px + L.gridX, gy = py + L.gridY;
+      for (let i = 0; i < cols * rows; i++) {
+        const sx = gx + (i % cols) * slot, sy = gy + Math.floor(i / cols) * slot;
+        const idx = start + i;
+        if (idx >= list.length) continue;
+        const type = list[idx];
+        if (mx >= sx && mx < sx + slot && my >= sy && my < sy + slot) {
+          ctx.fillStyle = 'rgba(255,255,255,0.52)';
+          ctx.fillRect(sx + 1, sy + 1, slot - 2, slot - 2);
+          this.hoverSlot = idx;
+        }
+        this.icon(type, sx + 1, sy + 1, 1);
+        this.slotRects.push({ x: sx, y: sy, w: slot, h: slot, type, idx });
+      }
+
+      /* ---- 滚动条 (轨道是烘焙在面板贴图里的, 这里只画滑块) ---- */
+      if (pages > 1) {
+        const sbx = px + 176, sby = py + L.gridY, sbh = rows * slot;
+        const th = Math.max(15, Math.round(sbh / pages));
+        const ty2 = sby + Math.round((sbh - th) * (this.scroll / Math.max(1, pages - 1)));
+        ctx.fillStyle = '#c6c6c6';
+        ctx.fillRect(sbx, ty2, 12, th);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(sbx, ty2, 12, 1); ctx.fillRect(sbx, ty2, 1, th);
+        ctx.fillStyle = '#555555';
+        ctx.fillRect(sbx, ty2 + th - 1, 12, 1); ctx.fillRect(sbx + 11, ty2, 1, th);
+      }
+
+      /* ---- 快捷栏一行 ---- */
+      const by = py + L.barY;
       for (let i = 0; i < 9; i++) {
-        const sx = px + 6 + i * (slot + pad), sy = hy;
-        this.slotBg(sx, sy);
-        const item = this.hotbar[i];
-        if (item) this.icon(item.type, sx + 1, sy + 1, 1);
+        const sx = gx + i * slot, sy = by;
         if (i === this.selected) {
           ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 1;
-          ctx.strokeRect(sx - 0.5, sy - 0.5, slot + 1, slot + 1);
+          ctx.strokeRect(sx + 0.5, sy + 0.5, slot - 1, slot - 1);
         }
-        this.slotRects.push({ x: sx, y: sy, w: slot, h: slot, hotbar: i });
+        const item = this.hotbar[i];
+        if (item && item.type) {
+          this.icon(item.type, sx + 1, sy + 1, 1);
+          if (item.count > 1) {
+            const n = String(item.count);
+            F().draw(ctx, n, sx + slot - 1 - F().width(n, 1), sy + slot - 9,
+              { scale: 1, color: '#ffffff', shadow: true });
+          }
+        }
+        this.slotRects.push({ x: sx, y: sy, w: slot, h: slot, hotbar: i, type: item ? item.type : 0 });
       }
-      if (maxScroll > 0) {
-        const sbx = px + panelW - 6, sby = py + 16, sbh = rows * (slot + pad) - pad;
-        ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        ctx.fillRect(sbx, sby, 4, sbh);
-        const kh = Math.max(10, sbh / (maxScroll + 1));
-        ctx.fillStyle = '#a0a0a0';
-        ctx.fillRect(sbx, sby + (sbh - kh) * (this.scroll / maxScroll || 0), 4, kh);
+
+      F().draw(ctx, '滚轮翻页 · 左键选取 · E 关闭', px + 8, py + ph + 5,
+        { scale: 1, color: '#e0e0e0', shadow: true });
+
+      /* ---- 悬停提示 (最后画, 保证在最上层) ---- */
+      if (this.hoverSlot >= 0) {
+        const t = list[this.hoverSlot];
+        const def = MC.Blocks.byType[t];
+        const name = (def && def.name) || (def && def.id) || '?';
+        const tw = F().width(name, 1);
+        const tx2 = MC.clamp(mx + 10, 2, w - tw - 10);
+        const ty2 = my - 16;
+        ctx.fillStyle = 'rgba(16,0,16,0.94)';
+        ctx.fillRect(tx2 - 4, ty2 - 3, tw + 8, 14);
+        ctx.strokeStyle = 'rgba(160,90,220,0.85)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(tx2 - 3.5, ty2 - 2.5, tw + 7, 13);
+        F().draw(ctx, name, tx2, ty2, { scale: 1, color: '#ffffff', shadow: true });
       }
-      F().draw(ctx, '滚轮翻页 · 左键选取 · E 关闭', px + 6, py + panelH - 10, { scale: 1, color: '#8a8a8a', shadow: true });
     }
 
     /* ---------- 暂停 / 设置 ---------- */
