@@ -157,10 +157,14 @@
       if (cached) return cached;
 
       const variant = b.variants[variantIdx] || b.variants[0];
-      const model = A.models[variant.model];
+      /* multipart 方块(玻璃板/铁栏杆/栅栏/墙...)由多个部件叠加而成, 每个部件
+       * 还带自己的旋转 (blockstate apply 的 x/y/z), 必须逐个生成几何。 */
+      const parts = variant.parts || [{ model: variant.model, rot: variant.rot || [0, 0, 0] }];
       const quads = [];
-      if (model) {
-        const rot = variant.rot || [0, 0, 0];
+      for (const part of parts) {
+        const model = A.models[part.model];
+        if (!model) continue;
+        const rot = part.rot || [0, 0, 0];
         const needsRot = rot[0] || rot[1] || rot[2];
         for (const el of model.elements) {
           const from = el.from, to = el.to;

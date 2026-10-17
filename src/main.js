@@ -885,9 +885,16 @@
           if (g.model !== v.model) errs.push(b.id + '#' + vi + ' 模型串号: ' + g.model + ' != ' + v.model);
           if (seen.has(g)) errs.push(b.id + '#' + vi + ' 与其他变体共享同一几何对象');
           seen.add(g);
-          const model = A.models[v.model];
           const want = new Set();
-          if (model && model.elements) {
+          const usedModels = [];
+          if (v.parts && v.parts.length) {
+            for (let pi = 0; pi < v.parts.length; pi++) {
+              const pm = A.models[v.parts[pi].model];
+              if (pm) usedModels.push(pm);
+            }
+          } else if (A.models[v.model]) usedModels.push(A.models[v.model]);
+          for (const model of usedModels) {
+            if (!model || !model.elements) continue;
             for (let e = 0; e < model.elements.length; e++) {
               const faces = model.elements[e].faces || {};
               for (const k in faces) {

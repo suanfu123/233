@@ -544,10 +544,16 @@ function buildVariants(id, meta) {
     }
     if (meta.forceState) for (const k in meta.forceState) canonical[k] = meta.forceState[k];
     const apply = bs.multipart.filter(part => matchWhen(part.when, canonical));
+    /* multipart 的多个部件是"叠加"关系 (例如玻璃板 = 立柱 + 四边薄片),
+     * 必须合并成同一个变体, 否则只会渲染出第一个部件, 表现为"缺面"。 */
+    const parts = [];
     for (const part of apply) {
       const v = part.apply;
       if (!v || typeof v.model !== 'string' || !v.model) continue;
-      variants.push({ props: canonical, state: stateString(canonical), model: stripNs(v.model), rot: [v.x || 0, v.y || 0, v.z || 0], uvlock: !!v.uvlock });
+      parts.push({ model: stripNs(v.model), rot: [v.x || 0, v.y || 0, v.z || 0], uvlock: !!v.uvlock });
+    }
+    if (parts.length) {
+      variants.push({ props: canonical, state: stateString(canonical), model: parts[0].model, parts, rot: [0, 0, 0], uvlock: false });
     }
   }
   return variants;
@@ -594,6 +600,21 @@ for (const id in LIST) {
     outVars.push({ state: '', props: {}, model: mname, rot: [0, 0, 0], ao: true });
   }
   for (const v of (meta.custom ? [] : variants)) {
+    /* multipart: 多个部件各自带旋转, 运行时按 parts 逐个生成几何 */
+    if (v.parts && v.parts.length) {
+      const outParts = [];
+      let bad = null;
+      for (const p of v.parts) {
+        const pm = resolveModel(p.model);
+        if (!pm || !pm.elements.length) { bad = p.model; break; }
+        usedModels.add(pm.name);
+        for (const el of pm.elements) for (const f in el.faces) texSet.add(el.faces[f].tex);
+        outParts.push({ model: pm.name, rot: p.rot });
+      }
+      if (bad || !outParts.length) { warnings.push(id + ' -> ' + (bad || v.model) + ' 无几何'); continue; }
+      outVars.push({ state: v.state, props: v.props, model: outParts[0].model, rot: [0, 0, 0], parts: outParts, ao: false });
+      continue;
+    }
     const m = resolveModel(v.model);
     if (!m || !m.elements.length) { warnings.push(id + ' -> ' + v.model + ' 无几何'); continue; }
     usedModels.add(m.name);
