@@ -293,7 +293,8 @@
       target: null,
       fps: 0, frameCount: 0, fpsTimer: 0,
       running: true,
-      breaking: { active: false, x: 0, y: 0, z: 0, progress: 0 }
+      breaking: { active: false, x: 0, y: 0, z: 0, progress: 0 },
+      breakCd: 0
     };
     MC.game = game;
 
@@ -663,8 +664,11 @@
       if (!t) return;
       const def = MC.Blocks.byType[t.type];
       if (!def || def.hardness < 0) return;
+      /* 破坏间隔: 按住不放时也要一块一块地挖, 否则一帧就能挖掉一串方块 */
+      if (game.breakCd > 0) return;
 
       if (player.mode === 'creative') {
+        game.breakCd = 0.2;
         breakBlock(t.x, t.y, t.z);
         return;
       }
@@ -674,7 +678,11 @@
       }
       const tool = 1;
       br.progress += dt * tool / Math.max(0.05, def.hardness);
-      if (br.progress >= 1) { breakBlock(t.x, t.y, t.z); br.progress = 0; br.active = false; }
+      if (br.progress >= 1) {
+        breakBlock(t.x, t.y, t.z);
+        br.progress = 0; br.active = false;
+        game.breakCd = 0.15;
+      }
     }
 
     function breakBlock(x, y, z) {
@@ -964,6 +972,7 @@
 
       /* 破坏 / 放置 */
       if (hud.screen === 'game') {
+        if (game.breakCd > 0) game.breakCd = Math.max(0, game.breakCd - dt);
         if (input.breakHeld && game.target) tryBreak(dt);
         else { game.breaking.active = false; game.breaking.progress = 0; }
         if (input.placeHeld) {
