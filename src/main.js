@@ -54,7 +54,7 @@
     screen: null, frames: 0, fly: false,
     nofog: qs.has('nofog'), nosky: qs.has('nosky'), solid: qs.has('solid'),
     full: qs.has('full'), noalpha: qs.has('noalpha'), nocull: qs.has('nocull'),
-    hideHud: qs.has('hidehud'), hudtest: qs.has('hudtest'), autotest: qs.has('autotest'),
+    hideHud: qs.has('hidehud'), hudtest: qs.has('hudtest'), autotest: qs.has('autotest'), selfcheck: qs.has('selfcheck'),
     water: qs.has('water'), scene: qs.has('scene')
   };
   const num = (v) => (v === undefined || v === null || isNaN(parseFloat(v)) ? null : parseFloat(v));
@@ -83,6 +83,8 @@
       else if (k === 'water') DBG.water = bool(v);
       else if (k === 'scene') DBG.scene = bool(v);
       else if (k === 'autotest') DBG.autotest = bool(v);
+      else if (k === 'selfcheck') DBG.selfcheck = bool(v);
+      else if (k === 'bench') DBG.bench = bool(v);
     }
   }
   if (qs.has('pitch')) DBG.pitch = num(qs.get('pitch'));
@@ -96,6 +98,8 @@
   if (qs.has('autotest')) DBG.autotest = true;
   if (qs.has('water')) DBG.water = true;
   if (qs.has('scene')) DBG.scene = true;
+  if (qs.has('selfcheck')) DBG.selfcheck = true;
+  if (DBG.selfcheck || DBG.autotest) { if (!DBG.frames) DBG.frames = 60; }
   if (!DBG.frames && (DBG.solid || DBG.full || DBG.nosky || DBG.noalpha || DBG.nocull || DBG.hideHud || DBG.hudtest || DBG.autotest)) DBG.frames = 40;
 
   const input = {
@@ -786,6 +790,25 @@
     function autotest() {
       try {
         const p = player;
+        /* 光照回归: 头顶放/拆方块, 检查天空光是否真的"减得下去" */
+        const lx0 = Math.floor(p.pos[0]), lz0 = Math.floor(p.pos[2]);
+        const ty = Math.floor(p.pos[1]) + 2;
+        const skyBefore = world.getLightFast(lx0, ty - 1, lz0) >> 4;
+        world.setBlock(lx0, ty, lz0, MC.Blocks.getByName('stone').type);
+        const skyCovered = world.getLightFast(lx0, ty - 1, lz0) >> 4;
+        world.setBlock(lx0, ty, lz0, 0);
+        const skyRestored = world.getLightFast(lx0, ty - 1, lz0) >> 4;
+        autoLog.push('skyLight ' + skyBefore + '->' + skyCovered + '->' + skyRestored);
+
+        /* 方块光回归: 火把放置/拆除 */
+        const tx = lx0 + 2, tz = lz0, tyy = Math.floor(p.pos[1]);
+        const b0 = world.getLightFast(tx, tyy, tz) & 15;
+        world.setBlock(tx, tyy, tz, MC.Blocks.getByName('torch').type);
+        const b1 = world.getLightFast(tx, tyy, tz) & 15;
+        world.setBlock(tx, tyy, tz, 0);
+        const b2 = world.getLightFast(tx, tyy, tz) & 15;
+        autoLog.push('torchLight ' + b0 + '->' + b1 + '->' + b2);
+
         p.pitch = -1.55; p.yaw = 0;
         const t = p.raycast(6);
         autoLog.push('target=' + (t ? (MC.Blocks.byType[t.type] || {}).id + '@' + t.x + ',' + t.y + ',' + t.z : 'none'));
@@ -831,9 +854,90 @@
       window.__autolog = autoLog.join(' | ');
     }
 
+    /**
+     * 资源一致性自检: 逐个方块变体重建几何, 检查
+     *  1) 缓存的几何对象是否真的属于这个变体 (防止 key 碰撞串号)
+     *  2) 每个面的贴图索引是否等于模型里写的贴图
+     * 结果挂到 window.__selfcheck, 可通过 ?d=selfcheck 在无头环境跑。
+     */
+    function selfcheck() {
+      const errs = [];
+      const B = MC.Blocks, A = window.MC_ASSETS;
+      const per = textures.layerCount || 256;
+      let variants = 0, quads = 0;
+      const seen = new Set();
+      for (let t = 1; t < B.byType.length; t++) {
+        const b = B.byType[t];
+        if (!b || !b.variants) continue;
+        for (let vi = 0; vi < b.variants.length; vi++) {
+          variants++;
+          const v = b.variants[vi];
+          const g = B.geo(t, vi);
+          if (!g) { errs.push(b.id + '#' + vi + ' 无几何'); continue; }
+          if (g.model !== v.model) errs.push(b.id + '#' + vi + ' 模型串号: ' + g.model + ' != ' + v.model);
+          if (seen.has(g)) errs.push(b.id + '#' + vi + ' 与其他变体共享同一几何对象');
+          seen.add(g);
+          const model = A.models[v.model];
+          const want = new Set();
+          if (model && model.elements) {
+            for (let e = 0; e < model.elements.length; e++) {
+              const faces = model.elements[e].faces || {};
+              for (const k in faces) {
+                const tex = faces[k].tex;
+                if (!tex) continue;
+                if (!textures.has(tex)) { errs.push(b.id + ' 缺贴图: ' + tex); continue; }
+                want.add(textures.lookup(tex).index);
+              }
+            }
+          }
+          const qs = g.quads;
+          for (let qi = 0; qi < qs.length; qi++) {
+            quads++;
+            const gi = qs[qi].arr * per + qs[qi].layer;
+            if (!want.has(gi)) errs.push(b.id + '#' + vi + ' 面贴图不符: ' + (textures.names[gi] || gi));
+          }
+        }
+      }
+      window.__selfcheck = { variants, quads, errCount: errs.length, errors: errs.slice(0, 12) };
+      return window.__selfcheck;
+    }
+
+    /** 生成 / 网格化耗时采样 (?d=bench) */
+    function bench() {
+      const gen = [], mesh = [], quads = [];
+      const chunks = [];
+      for (let i = 0; i < 16; i++) {
+        const c = world.ensureChunk(60 + i, 60);
+        const t0 = performance.now();
+        world._generate(c);
+        gen.push(+(performance.now() - t0).toFixed(1));
+        chunks.push(c);
+      }
+      for (const c of chunks) {
+        const t0 = performance.now();
+        const m = c.buildMesh(MC.Mesher);
+        mesh.push(+(performance.now() - t0).toFixed(1));
+        quads.push((m.opaque ? m.opaque.count || 0 : 0) + (m.translucent ? m.translucent.count || 0 : 0));
+      }
+      const avg = (a) => +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(1);
+      window.__bench = {
+        genAvg: avg(gen), meshAvg: avg(mesh), gen, mesh, quads,
+        yRange: chunks.map(function (c) { return c.minY + '-' + c.maxY; })
+      };
+      return window.__bench;
+    }
+
     function frame(now) {
       frameNo++;
-      if (DBG.autotest && frameNo === 25) autotest();
+      if (DBG.autotest && frameNo === 2) autotest();
+      if (DBG.selfcheck && frameNo === 3) {
+        try { selfcheck(); }
+        catch (e) { window.__selfcheck = { error: e.message, stack: String(e.stack || '').split('\n').slice(0, 4).join(' / ') }; }
+        document.title = 'SC ' + (window.__selfcheck.error ? 'ERR' : window.__selfcheck.errCount);
+      }
+      if (DBG.bench && frameNo === 3) {
+        try { bench(); } catch (e) { window.__bench = { error: e.message }; }
+      }
       if (!DBG.frames || frameNo < DBG.frames) requestAnimationFrame(frame);
       let dt = (now - last) / 1000;
       last = now;
@@ -961,7 +1065,7 @@
           onGround: player.onGround, flying: player.flying, inWater: player.inWater,
           chunks: world.chunks.size, meshed: renderer.visible.length,
           draws: renderer.drawCalls, tris: Math.round(renderer.triangles),
-          fps: game.fps, target: game.target ? (MC.Blocks.byType[game.target.type] || {}).id : null,
+          fps: game.fps, frames: frameNo, target: game.target ? (MC.Blocks.byType[game.target.type] || {}).id : null,
           time: Math.round(game.worldTime), dayLight: game._env ? +game._env.dayLight.toFixed(2) : null,
           lightAbove: world.getLightFast(Math.floor(p[0]), Math.floor(p[1]) + 1, Math.floor(p[2])) >> 4,
           screen: hud.screen, autolog: window.__autolog || '',
@@ -981,6 +1085,8 @@
           })(),
           animFrames: [(textures.anim.water || {}).frames || 0, (textures.anim.lava || {}).frames || 0],
           texArrays: textures.arrays.length, texCount: textures.names.length,
+          self: window.__selfcheck || null,
+          bench: window.__bench || null,
           glErr: gl.getError()
         });
       }

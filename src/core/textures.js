@@ -173,6 +173,9 @@
 
       const api = {
         arrays, arrayCount, layerOf, arrOf, texIndex, names, imgs, anim, gui, colormap, dummy2D,
+        /** 每个纹理数组的层数: index = arr * layerCount + layer */
+        layerCount: LAYERS_PER_ARRAY,
+        has(name) { return texIndex[name] !== undefined; },
         /** 贴图名 -> {layer, arr, index} */
         lookup(name) {
           const i = texIndex[name];
