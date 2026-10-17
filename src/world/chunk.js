@@ -398,8 +398,10 @@
                   sky = sSum / (15 * cnt);
                   blk = bSum / (15 * cnt);
                 } else {
-                  const l0 = getL(gx + nrm[0], gy + nrm[1], gz + nrm[2]);
-                  sky = (l0 >> 4) / 15; blk = (l0 & 15) / 15;
+                  /* 十字/平面模型 (草、花、藤蔓、火把、液体...): 用自身格子光照。
+                   * 旧实现按面法线取邻居格的光照, 植物一旦贴着墙/地面, 邻居就是
+                   * 实心方块, 光照为 0, 整片贴图被压成黑色 (表现为"半边黑")。 */
+                  sky = skyOwn; blk = blkOwn;
                 }
 
                 const o = (builder.nv) * 13;
