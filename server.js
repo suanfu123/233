@@ -1,11 +1,13 @@
 /*
  * server.js — 零依赖本地静态服务器
  * 用法:  node server.js [端口]
+ *
+ * 特性: ETag/304 协商缓存、文本资源 gzip、目录穿越防护、禁止目录列表。
  */
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const url = require('url');
+const zlib = require('zlib');
 
 const ROOT = path.resolve(__dirname);
 const PORT = parseInt(process.argv[2], 10) || 8080;
@@ -33,62 +35,94 @@ const MIME = {
   '.ttf': 'font/ttf'
 };
 
-const server = http.createServer((req, res) => {
-  /* 只允许 GET 和 HEAD */
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    res.writeHead(405);
-    res.end('405 Method Not Allowed');
-    return;
+/* 值得压缩的类型 (png/bin 已经压过, 再 gzip 只是浪费 CPU) */
+const COMPRESSIBLE = /^\.(html|js|css|json|txt|mcmeta|svg)$/;
+
+/* gzip 结果缓存: 键 = ETag, 值 = Buffer */
+const gzCache = new Map();
+const GZ_CACHE_MAX = 48;
+
+function sendError(res, code, text) {
+  res.writeHead(code, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end(code + ' ' + text);
+}
+
+/** 把 URL 路径规范化成 ROOT 之内的绝对路径, 不合法时返回 null */
+function resolvePath(rawUrl) {
+  let p;
+  try {
+    p = decodeURIComponent(new URL(rawUrl, 'http://localhost').pathname);
+  } catch (e) {
+    return null;
   }
-
-  let p = decodeURIComponent(url.parse(req.url).pathname);
-  if (p === '/') p = '/index.html';
-
-  /* 严格路径规范化: 移除 . 和 ..，禁止反斜杠 */
+  if (p === '/' || p === '') p = '/index.html';
   p = p.replace(/\\/g, '/');
-  const parts = p.split('/').filter(Boolean);
   const safeParts = [];
-  for (const part of parts) {
-    if (part === '.' || part === '..') continue;
+  for (const part of p.split('/')) {
+    if (part === '' || part === '.' || part === '..') continue;
+    if (part.indexOf('\0') >= 0) return null;
     safeParts.push(part);
   }
-  p = '/' + safeParts.join('/');
+  const file = path.join(ROOT, safeParts.join('/'));
+  /* path.join 已经消掉了 .., 这里再确认一次确实在 ROOT 之内 */
+  if (file !== ROOT && !file.startsWith(ROOT + path.sep)) return null;
+  return file;
+}
 
-  const file = path.join(ROOT, path.normalize(p));
-
-  /* 确保路径在 ROOT 之下 (防止目录穿越) */
-  if (!file.startsWith(ROOT)) {
-    res.writeHead(403);
-    res.end('403 Forbidden');
-    return;
+const server = http.createServer((req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return sendError(res, 405, 'Method Not Allowed');
   }
+  const file = resolvePath(req.url);
+  if (!file) return sendError(res, 403, 'Forbidden');
 
-  /* 禁止目录列表: 如果是目录且没有 index.html，返回 403 */
-  try {
-    const stat = fs.statSync(file);
-    if (stat.isDirectory()) {
-      res.writeHead(403);
-      res.end('403 Forbidden: directory listing not allowed');
-      return;
-    }
-  } catch (e) {
-    /* 文件不存在，稍后会返回 404 */
-  }
+  fs.stat(file, (err, stat) => {
+    if (err) return sendError(res, 404, 'Not Found');
+    if (stat.isDirectory()) return sendError(res, 403, 'Forbidden: directory listing not allowed');
 
-  fs.readFile(file, (err, data) => {
-    if (err) {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('404 Not Found: ' + p);
-      return;
-    }
     const ext = path.extname(file).toLowerCase();
-    const contentType = MIME[ext] || 'application/octet-stream';
-    res.writeHead(200, {
-      'Content-Type': contentType,
-      'Cache-Control': 'no-store, no-cache, must-revalidate',
+    const etag = 'W/"' + stat.size.toString(16) + '-' + Math.round(stat.mtimeMs).toString(16) + '"';
+    const headers = {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      /* no-cache = 允许缓存但要回来验证, 改文件后刷新即可生效 */
+      'Cache-Control': 'no-cache',
+      'ETag': etag,
+      'Last-Modified': stat.mtime.toUTCString(),
       'X-Content-Type-Options': 'nosniff'
+    };
+
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, headers);
+      return res.end();
+    }
+
+    fs.readFile(file, (err2, data) => {
+      if (err2) return sendError(res, 500, 'Read Error');
+      const wantGzip = COMPRESSIBLE.test(ext) && data.length > 1024 &&
+        /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+
+      const finish = (body, encoding) => {
+        if (encoding) {
+          headers['Content-Encoding'] = encoding;
+          headers['Vary'] = 'Accept-Encoding';
+        }
+        headers['Content-Length'] = body.length;
+        res.writeHead(200, headers);
+        if (req.method === 'HEAD') res.end(); else res.end(body);
+      };
+
+      if (!wantGzip) return finish(data, null);
+
+      const hit = gzCache.get(etag);
+      if (hit) return finish(hit, 'gzip');
+
+      zlib.gzip(data, (e, buf) => {
+        if (e) return finish(data, null);
+        if (gzCache.size >= GZ_CACHE_MAX) gzCache.clear();
+        gzCache.set(etag, buf);
+        finish(buf, 'gzip');
+      });
     });
-    res.end(data);
   });
 });
 
