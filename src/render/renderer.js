@@ -195,6 +195,11 @@ void main(){ fragColor = uColor; }`;
       this.itemView = MC.mat4.create();
       this.identity = MC.mat4.create();
       this.tmpM = MC.mat4.create();
+      /* 每帧复用的矩阵, 避免在渲染循环里反复分配 */
+      this.tmpVP = MC.mat4.create();
+      this.tmpHL = MC.mat4.create();
+      this.tmpOverlay = MC.mat4.create();
+      this.tmpItem = MC.mat4.create();
     }
 
     /* ---------- 区块网格 ---------- */
@@ -278,7 +283,7 @@ void main(){ fragColor = uColor; }`;
       }
 
       /* 收集可见区块 */
-      const planes = MC.gl.frustum(MC.mat4.mul(MC.mat4.create(), cam.proj, cam.view));
+      const planes = MC.gl.frustum(MC.mat4.mul(this.tmpVP, cam.proj, cam.view));
       const list = this.visible;
       list.length = 0;
       const R = world.renderDistance;
@@ -346,7 +351,7 @@ void main(){ fragColor = uColor; }`;
     drawHighlight(cam, hl) {
       const gl = this.gl, p = this.lineProg;
       gl.useProgram(p.program);
-      const M = MC.mat4.create();
+      const M = MC.mat4.identity(this.tmpHL);
       const b = hl.box || [0, 0, 0, 1, 1, 1];
       const e = 0.0025;   // 略微外扩, 避免与方块面 z-fighting 导致闪烁
       M[0] = (b[3] - b[0]) + e * 2; M[5] = (b[4] - b[1]) + e * 2; M[10] = (b[5] - b[2]) + e * 2;
@@ -392,8 +397,7 @@ void main(){ fragColor = uColor; }`;
       }
       if (!this.overlayMesh) return;
       gl.useProgram(p.program);
-      const M = MC.mat4.create();
-      M[0] = 1.0; M[5] = 1.0; M[10] = 1.0;
+      const M = MC.mat4.identity(this.tmpOverlay);
       M[12] = info.x; M[13] = info.y; M[14] = info.z;
       gl.uniformMatrix4fv(p.u.uModel, false, M);
       gl.uniform1f(p.u.uAlphaTest, 0.02);
@@ -419,7 +423,7 @@ void main(){ fragColor = uColor; }`;
       const aspect = cam.aspect;
       MC.mat4.perspective(this.itemProj, cam.fov, aspect, 0.02, 6);
       MC.mat4.identity(this.itemView);
-      const M = MC.mat4.create();
+      const M = this.tmpItem;
       const s = 1.0;
       // 位于右下角, 略微旋转
       trs(M, 0.58, -0.52 - Math.sin(swing * Math.PI) * 0.18, -0.72,
